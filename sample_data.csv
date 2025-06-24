@@ -1,0 +1,11 @@
+projectid,customerid,gender,purchasing_reason,decide_purchase_reason,questiondate,questiontime,fillindate,fillintime,age_group,income_level,education_level,marital_status,has_children,previous_purchase,source_channel,preferred_contact,property_type,unit_size,price_range,location_preference,urgency_level,decision_time,has_booked
+6,1001,Male,Investment,Good ROI,2023-01-15,14:30:00,2023-01-15,14:35:00,35-44,High,Graduate,Married,Yes,Yes,Online,Email,Condo,2BR,500K-1M,City Center,High,1-3 months,1
+6,1002,Female,Self-Use,Location,2023-01-16,10:15:00,2023-01-16,10:20:00,25-34,Medium,Bachelor,Single,No,No,Referral,Phone,Apartment,1BR,300K-500K,Suburban,Medium,3-6 months,0
+8,1003,Male,Investment,Market Growth,2023-01-17,16:45:00,2023-01-17,16:50:00,45-54,High,Post-Graduate,Married,Yes,Yes,Direct,Email,House,3BR,1M-2M,City Center,Low,6-12 months,1
+8,1004,Female,Self-Use,Family Needs,2023-01-18,11:20:00,2023-01-18,11:25:00,35-44,Medium,Graduate,Married,Yes,No,Online,Phone,Condo,2BR,500K-1M,Suburban,High,1-3 months,0
+10,1005,Male,Investment,Rental Income,2023-01-19,13:10:00,2023-01-19,13:15:00,25-34,High,Bachelor,Single,No,Yes,Referral,Email,Apartment,1BR,300K-500K,City Center,Medium,3-6 months,1
+10,1006,Female,Self-Use,Work Proximity,2023-01-20,09:30:00,2023-01-20,09:35:00,25-34,Medium,Graduate,Single,No,No,Direct,Phone,Condo,1BR,300K-500K,City Center,High,1-3 months,0
+12,1007,Male,Investment,Portfolio Diversification,2023-01-21,15:20:00,2023-01-21,15:25:00,45-54,High,Post-Graduate,Married,Yes,Yes,Online,Email,House,4BR,2M+,Suburban,Low,6-12 months,1
+12,1008,Female,Self-Use,Retirement Planning,2023-01-22,12:45:00,2023-01-22,12:50:00,55-64,Medium,Graduate,Married,No,No,Referral,Phone,Condo,2BR,500K-1M,Suburban,Medium,3-6 months,0
+13,1009,Male,Investment,Capital Appreciation,2023-01-23,14:15:00,2023-01-23,14:20:00,35-44,High,Bachelor,Married,Yes,Yes,Direct,Email,Apartment,2BR,500K-1M,City Center,Medium,3-6 months,1
+13,1010,Female,Self-Use,Student Housing,2023-01-24,10:50:00,2023-01-24,10:55:00,18-24,Low,High School,Single,No,No,Online,Phone,Condo,1BR,200K-300K,City Center,High,1-3 months,0 

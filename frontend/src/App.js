@@ -3,7 +3,7 @@ import { Container, Row, Col, Card, Button, Alert, Spinner } from 'react-bootstr
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiCheckCircle, FiXCircle } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiCheckCircle, FiXCircle, FiSun, FiMoon } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
@@ -12,11 +12,22 @@ function App() {
   const [predictions, setPredictions] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [darkMode, setDarkMode] = useState(() => {
+    // Persist mode in localStorage
+    return localStorage.getItem('darkMode') === 'true';
+  });
+  const [showPreview, setShowPreview] = useState(true);
 
   useEffect(() => {
     // Fetch available models on component mount
     fetchAvailableModels();
   }, []);
+
+  useEffect(() => {
+    document.body.classList.toggle('dark-mode', darkMode);
+    document.body.classList.toggle('light-mode', !darkMode);
+    localStorage.setItem('darkMode', darkMode);
+  }, [darkMode]);
 
   const fetchAvailableModels = async () => {
     try {
@@ -46,6 +57,8 @@ function App() {
       });
 
       setFileData(response.data);
+      setShowPreview(true);
+      setPredictions(null);
     } catch (error) {
       setError(error.response?.data?.error || 'Error uploading file');
     } finally {
@@ -75,6 +88,7 @@ function App() {
       });
 
       setPredictions(response.data);
+      setShowPreview(false); // Hide preview after prediction
     } catch (error) {
       setError(error.response?.data?.error || 'Error generating predictions');
     } finally {
@@ -114,6 +128,7 @@ function App() {
       setFileData(null);
       setPredictions(null);
       setError(null);
+      setShowPreview(true);
     } catch (error) {
       console.error('Error during cleanup:', error);
     }
@@ -200,7 +215,6 @@ function App() {
               </div>
             </Col>
           </Row>
-          
           <div className="mt-3">
             <h6>Project Details:</h6>
             <div className="d-flex flex-wrap gap-2">
@@ -267,6 +281,13 @@ function App() {
 
   return (
     <Container fluid className="upload-container">
+      <button
+        className="theme-toggle"
+        onClick={() => setDarkMode((dm) => !dm)}
+        title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      >
+        {darkMode ? <FiMoon /> : <FiSun />}
+      </button>
       <Row className="justify-content-center">
         <Col lg={10}>
           <div className="text-center mb-4">
@@ -314,7 +335,7 @@ function App() {
             </div>
           )}
 
-          {fileData && !loading && (
+          {fileData && !loading && showPreview && (
             <>
               <Card className="mb-4">
                 <Card.Header>
@@ -390,6 +411,18 @@ function App() {
                   </div>
                 </Card.Body>
               </Card>
+
+              {/* Upload New File button at the bottom */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  onClick={cleanup}
+                  style={{ minWidth: 220, fontWeight: 600 }}
+                >
+                  Upload New File
+                </Button>
+              </div>
             </>
           )}
         </Col>

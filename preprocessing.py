@@ -4,6 +4,9 @@ import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
+import os
+from pathlib import Path
+import uuid
 
 def read_data(data_path, table_path):
     def read_file_by_extension(file_path):
@@ -172,6 +175,7 @@ def clean_financial_columns(df):
         df['individual_monthly_income_baht'] = df['individual_monthly_income_baht'].apply(processors['process_individual_income'])
 
     return df
+
 def fill_missing_categoricals(df, ordinal_features=None, nominal_features=None):
     ordinal_features = ordinal_features or []
     nominal_features = nominal_features or []
@@ -250,6 +254,69 @@ def run_pipeline(data_path, table_path, output_csv, output_excel):
 
     no_y = df.drop(columns=['has_booked'], errors='ignore')
     export_data(no_y, output_csv, output_excel)
+
+def get_raw_preview(df, n=5):
+    if len(df) <= 2 * n:
+        return df.copy()
+    return pd.concat([df.head(n), df.tail(n)])
+
+def preprocess_data(filepath, company_data_path=None, save_dir=None):
+    """
+    Preprocess uploaded file (all transformations except encoding).
+    - filepath: path to uploaded file (in uploads/)
+    - company_data_path: path to company data (if None, use default)
+    - save_dir: where to save processed file (if None, use backend/preprocessed_unencoded/)
+    Returns: processed DataFrame (unencoded)
+    """
+    # Set defaults
+    if company_data_path is None:
+        company_data_path = str(Path(__file__).parent / 'backend' / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx')
+    if save_dir is None:
+        save_dir = str(Path(__file__).parent / 'backend' / 'preprocessed_unencoded')
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Read company data
+    company_df = pd.read_excel(company_data_path, engine='openpyxl')
+    company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+
+    # Read input file
+    ext = str(filepath).split('.')[-1].lower()
+    if ext == 'csv':
+        df = pd.read_csv(filepath)
+    elif ext in ('xlsx', 'xls'):
+        df = pd.read_excel(filepath, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
+    else:
+        raise ValueError('Unsupported file type')
+
+    # Validate projectid
+    if 'projectid' not in df.columns:
+        raise ValueError('File must contain a "projectid" column.')
+    if not df['projectid'].isin(company_df['projectid']).all():
+        raise ValueError('Some projectid values are not found in company data.')
+
+    # Merge with company data
+    df = pd.merge(df, company_df, on='projectid', how='left')
+
+    # Save original column order
+    orig_cols = list(df.columns)
+
+    # Preprocessing steps (no encoding)
+    df = preprocess_dates(df)
+    df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
+    df = add_seasonal_features(df, 'questiondate')
+    df = clean_financial_columns(df)
+    # Add more features as needed, but skip encoding
+
+    # Save processed file
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    fname = Path(filepath).stem
+    out_path = os.path.join(save_dir, f'{fname}_preprocessed_{timestamp}.csv')
+    df.to_csv(out_path, index=False)
+
+    # Reorder columns: original + new features at end
+    new_cols = [c for c in df.columns if c not in orig_cols]
+    df = df[orig_cols + new_cols]
+    return df
 
 if __name__ == "__main__":
     import argparse

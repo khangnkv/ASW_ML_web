@@ -9,6 +9,7 @@ import './App.css';
 
 function App() {
   const [fileData, setFileData] = useState(null);
+  const [uploadedFilename, setUploadedFilename] = useState(null);
   const [predictions, setPredictions] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -50,15 +51,23 @@ function App() {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('/api/upload', formData, {
+      const response = await axios.post('/api/upload_uuid', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
-
-      setFileData(response.data);
+      setFileData({
+        filename: response.data.filename,
+        preview: response.data.preview,
+        originalName: file.name,
+      });
+      setUploadedFilename(response.data.filename);
       setShowPreview(true);
-      setPredictions(null);
+      console.log('Uploaded fileData:', {
+        filename: response.data.filename,
+        preview: response.data.preview,
+        originalName: file.name,
+      });
     } catch (error) {
       setError(error.response?.data?.error || 'Error uploading file');
     } finally {
@@ -78,15 +87,12 @@ function App() {
 
   const generatePredictions = async () => {
     if (!fileData) return;
-
     setLoading(true);
     setError(null);
-
     try {
-      const response = await axios.post('/api/predict', {
+      const response = await axios.post('/api/predict_workflow', {
         filename: fileData.filename,
       });
-
       setPredictions(response.data);
       setShowPreview(false); // Hide preview after prediction
     } catch (error) {
@@ -119,30 +125,32 @@ function App() {
   };
 
   const cleanup = async () => {
-    if (!fileData) return;
+    setFileData(null);
+    setUploadedFilename(null);
+    setError(null);
+    setShowPreview(true);
+  };
 
-    try {
-      await axios.post('/api/cleanup', {
-        filename: fileData.filename,
-      });
-      setFileData(null);
-      setPredictions(null);
-      setError(null);
-      setShowPreview(true);
-    } catch (error) {
-      console.error('Error during cleanup:', error);
-    }
+  // Helper to merge raw preview and prediction column for final preview
+  const getFinalPreviewWithPrediction = () => {
+    if (!predictions || !predictions.preview?.raw || !predictions.preview?.final) return [];
+    const rawRows = predictions.preview.raw;
+    const predRows = predictions.preview.final;
+    // If lengths mismatch, fallback to predRows
+    if (rawRows.length !== predRows.length) return predRows;
+    // Merge has_booked_prediction from predRows into rawRows
+    return rawRows.map((row, idx) => {
+      const pred = predRows[idx]?.has_booked_prediction;
+      return { ...row, has_booked_prediction: pred };
+    });
   };
 
   const renderPreviewTable = (data, title) => {
     if (!data || data.length === 0) return null;
-
     let columns = Object.keys(data[0]);
-    // Ensure has_booked_prediction is last
     if (columns.includes('has_booked_prediction')) {
       columns = columns.filter(c => c !== 'has_booked_prediction').concat(['has_booked_prediction']);
     }
-
     return (
       <Card className="mb-4">
         <Card.Header>
@@ -344,15 +352,13 @@ function App() {
                 <Card.Body>
                   <Row>
                     <Col md={6}>
-                      <p><strong>Filename:</strong> {fileData.filename}</p>
-                      <p><strong>Total Rows:</strong> {fileData.total_rows.toLocaleString()}</p>
-                      <p><strong>Columns:</strong> {fileData.columns.length}</p>
+                      <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
                     </Col>
                     <Col md={6}>
                       <Button
                         variant="primary"
                         onClick={generatePredictions}
-                        disabled={loading}
+                        disabled={loading || !fileData}
                         className="me-2"
                       >
                         <FiDatabase className="me-2" />
@@ -365,19 +371,32 @@ function App() {
                   </Row>
                 </Card.Body>
               </Card>
-
-              {renderModelStatus()}
-
-              {renderPreviewTable(fileData.preview_data, 'File Preview (First & Last 5 Rows)')}
+              {(!fileData.preview || fileData.preview.length === 0) ? (
+                <Alert variant="warning">No preview data available for this file.</Alert>
+              ) : (
+                renderPreviewTable(fileData.preview, 'File Preview (First & Last 5 Rows)')
+              )}
             </>
           )}
 
           {predictions && !loading && (
             <>
-              {renderPredictionStats()}
-
-              {renderPreviewTable(predictions.preview_data, 'Prediction Results Preview')}
-
+              <Card className="mb-4">
+                <Card.Header>
+                  <h5 className="mb-0">Prediction Results</h5>
+                </Card.Header>
+                <Card.Body>
+                  <Row>
+                    <Col md={6}>
+                      <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
+                      <p><strong>Prediction Distribution:</strong> {JSON.stringify(predictions.stats?.prediction_distribution ?? {})}</p>
+                    </Col>
+                  </Row>
+                </Card.Body>
+              </Card>
+              {/* Only show Final Prediction Preview, with has_booked_prediction as last column */}
+              <h5>Final Prediction Preview</h5>
+              {renderPreviewTable(getFinalPreviewWithPrediction(), 'Prediction Results Preview (Raw Data + Prediction)')}
               <Card>
                 <Card.Header>
                   <h5 className="mb-0">
@@ -411,7 +430,6 @@ function App() {
                   </div>
                 </Card.Body>
               </Card>
-
               {/* Upload New File button at the bottom */}
               <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
                 <Button

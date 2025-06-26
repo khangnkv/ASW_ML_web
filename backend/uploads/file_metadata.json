@@ -1,0 +1,50 @@
+{
+  "3b113791-4c99-452c-9d7b-0d4b8e9116c9.csv": {
+    "filename": "3b113791-4c99-452c-9d7b-0d4b8e9116c9.csv",
+    "original_filename": "New_QN_data_1.xlsx",
+    "upload_timestamp": "2025-06-26T10:23:33.413059",
+    "deletion_date": "2025-09-24T10:23:33.413059",
+    "file_path": "uploads\\3b113791-4c99-452c-9d7b-0d4b8e9116c9.csv",
+    "status": "active"
+  },
+  "c9d0d079-6ce4-4839-adfd-63efcdc3709b.csv": {
+    "filename": "c9d0d079-6ce4-4839-adfd-63efcdc3709b.csv",
+    "original_filename": "New_QN_data_1.xlsx",
+    "upload_timestamp": "2025-06-26T10:29:12.473328",
+    "deletion_date": "2025-09-24T10:29:12.473328",
+    "file_path": "uploads\\c9d0d079-6ce4-4839-adfd-63efcdc3709b.csv",
+    "status": "active"
+  },
+  "4d7ba8da-3acd-48bd-9711-5269447a7b8e.csv": {
+    "filename": "4d7ba8da-3acd-48bd-9711-5269447a7b8e.csv",
+    "original_filename": "df_sorted.csv",
+    "upload_timestamp": "2025-06-26T10:36:43.711316",
+    "deletion_date": "2025-09-24T10:36:43.711316",
+    "file_path": "uploads\\4d7ba8da-3acd-48bd-9711-5269447a7b8e.csv",
+    "status": "active"
+  },
+  "91e84929-dfaa-4a0c-80c6-c1ec53c051e6.csv": {
+    "filename": "91e84929-dfaa-4a0c-80c6-c1ec53c051e6.csv",
+    "original_filename": "New_QN_data_1.xlsx",
+    "upload_timestamp": "2025-06-26T10:37:25.430257",
+    "deletion_date": "2025-09-24T10:37:25.430257",
+    "file_path": "uploads\\91e84929-dfaa-4a0c-80c6-c1ec53c051e6.csv",
+    "status": "active"
+  },
+  "9fe77bec-0d9a-4348-8365-e0f64c276041.csv": {
+    "filename": "9fe77bec-0d9a-4348-8365-e0f64c276041.csv",
+    "original_filename": "New_QN_data_1.xlsx",
+    "upload_timestamp": "2025-06-26T10:51:20.524495",
+    "deletion_date": "2025-09-24T10:51:20.524495",
+    "file_path": "uploads\\9fe77bec-0d9a-4348-8365-e0f64c276041.csv",
+    "status": "active"
+  },
+  "064298d2-d50f-4709-98c7-7af6aac56be2.csv": {
+    "filename": "064298d2-d50f-4709-98c7-7af6aac56be2.csv",
+    "original_filename": "New_QN_data_1.xlsx",
+    "upload_timestamp": "2025-06-26T10:59:40.357886",
+    "deletion_date": "2025-09-24T10:59:40.357886",
+    "file_path": "uploads\\064298d2-d50f-4709-98c7-7af6aac56be2.csv",
+    "status": "active"
+  }
+}

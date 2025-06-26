@@ -1,15 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Alert, Spinner } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Container, Row, Col, Card, Button, Alert, Spinner, Badge } from 'react-bootstrap';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiCheckCircle, FiXCircle, FiSun, FiMoon } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
+// Import new components
+import ProjectFilters from './components/ProjectFilters';
+import DataStats from './components/DataStats';
+
 function App() {
   const [fileData, setFileData] = useState(null);
-  const [uploadedFilename, setUploadedFilename] = useState(null);
   const [predictions, setPredictions] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -18,10 +21,20 @@ function App() {
     return localStorage.getItem('darkMode') === 'true';
   });
   const [showPreview, setShowPreview] = useState(true);
+  const [fileInfo, setFileInfo] = useState(null);
+  const [storageStats, setStorageStats] = useState(null);
+  
+  // Project filtering state
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [availableProjects, setAvailableProjects] = useState([]);
+  const [fullDataset, setFullDataset] = useState(null);
+  const [filteredData, setFilteredData] = useState(null);
+  const [filterLoading, setFilterLoading] = useState(false);
 
   useEffect(() => {
     // Fetch available models on component mount
     fetchAvailableModels();
+    fetchStorageStats();
   }, []);
 
   useEffect(() => {
@@ -40,6 +53,79 @@ function App() {
     }
   };
 
+  const fetchStorageStats = async () => {
+    try {
+      const response = await axios.get('/api/storage/stats');
+      setStorageStats(response.data);
+    } catch (error) {
+      console.error('Error fetching storage stats:', error);
+    }
+  };
+
+  // Extract unique projects from data
+  const extractProjects = useCallback((data) => {
+    if (!data || data.length === 0) return [];
+    
+    const projects = new Set();
+    data.forEach(row => {
+      if (row.projectid) {
+        projects.add(row.projectid.toString());
+      }
+    });
+    
+    return Array.from(projects);
+  }, []);
+
+  // Filter data by project
+  const filterDataByProject = useCallback((data, projectId) => {
+    if (!data || !projectId) return data;
+    
+    setFilterLoading(true);
+    
+    // Use setTimeout to prevent UI blocking for large datasets
+    setTimeout(() => {
+      const filtered = data.filter(row => 
+        row.projectid && row.projectid.toString() === projectId.toString()
+      );
+      setFilteredData(filtered);
+      setFilterLoading(false);
+    }, 0);
+  }, []);
+
+  // Handle project selection
+  const handleProjectFilter = useCallback((projectId) => {
+    setSelectedProject(projectId);
+    if (projectId) {
+      filterDataByProject(fullDataset, projectId);
+    } else {
+      setFilteredData(fullDataset);
+    }
+  }, [fullDataset, filterDataByProject]);
+
+  // Handle filter reset
+  const handleFilterReset = useCallback(() => {
+    setSelectedProject(null);
+    setFilteredData(fullDataset);
+  }, [fullDataset]);
+
+  // Memoized current data (either filtered or full dataset)
+  const currentData = useMemo(() => {
+    return selectedProject ? filteredData : fullDataset;
+  }, [selectedProject, filteredData, fullDataset]);
+
+  // Memoized display data for preview (first and last 5 rows)
+  const displayData = useMemo(() => {
+    if (!currentData || currentData.length === 0) return [];
+    
+    if (currentData.length <= 10) {
+      return currentData;
+    }
+    
+    const first5 = currentData.slice(0, 5);
+    const last5 = currentData.slice(-5);
+    return [...first5, ...last5];
+  }, [currentData]);
+
   const onDrop = async (acceptedFiles) => {
     if (acceptedFiles.length === 0) return;
 
@@ -56,17 +142,32 @@ function App() {
           'Content-Type': 'multipart/form-data',
         },
       });
+      
+      // Cache the full dataset for filtering
+      setFullDataset(response.data.preview);
+      setFilteredData(response.data.preview);
+      
+      // Extract available projects
+      const projects = extractProjects(response.data.preview);
+      setAvailableProjects(projects);
+      
       setFileData({
         filename: response.data.filename,
         preview: response.data.preview,
         originalName: file.name,
       });
-      setUploadedFilename(response.data.filename);
+      setFileInfo(response.data.file_info);
       setShowPreview(true);
+      
+      // Reset filter state
+      setSelectedProject(null);
+      
       console.log('Uploaded fileData:', {
         filename: response.data.filename,
         preview: response.data.preview,
         originalName: file.name,
+        fileInfo: response.data.file_info,
+        availableProjects: projects,
       });
     } catch (error) {
       setError(error.response?.data?.error || 'Error uploading file');
@@ -93,8 +194,21 @@ function App() {
       const response = await axios.post('/api/predict_workflow', {
         filename: fileData.filename,
       });
+      
+      // Cache the full prediction dataset
+      const fullPredictionData = response.data.preview.final;
+      setFullDataset(fullPredictionData);
+      setFilteredData(fullPredictionData);
+      
+      // Re-extract projects from prediction data (in case preprocessing changed project IDs)
+      const projects = extractProjects(fullPredictionData);
+      setAvailableProjects(projects);
+      
       setPredictions(response.data);
       setShowPreview(false); // Hide preview after prediction
+      
+      // Reset filter state for prediction results
+      setSelectedProject(null);
     } catch (error) {
       setError(error.response?.data?.error || 'Error generating predictions');
     } finally {
@@ -126,35 +240,36 @@ function App() {
 
   const cleanup = async () => {
     setFileData(null);
-    setUploadedFilename(null);
+    setPredictions(null);
+    setFileInfo(null);
     setError(null);
     setShowPreview(true);
-  };
-
-  // Helper to merge raw preview and prediction column for final preview
-  const getFinalPreviewWithPrediction = () => {
-    if (!predictions || !predictions.preview?.raw || !predictions.preview?.final) return [];
-    const rawRows = predictions.preview.raw;
-    const predRows = predictions.preview.final;
-    // If lengths mismatch, fallback to predRows
-    if (rawRows.length !== predRows.length) return predRows;
-    // Merge has_booked_prediction from predRows into rawRows
-    return rawRows.map((row, idx) => {
-      const pred = predRows[idx]?.has_booked_prediction;
-      return { ...row, has_booked_prediction: pred };
-    });
+    
+    // Reset filter state
+    setSelectedProject(null);
+    setAvailableProjects([]);
+    setFullDataset(null);
+    setFilteredData(null);
+    setFilterLoading(false);
   };
 
   const renderPreviewTable = (data, title) => {
     if (!data || data.length === 0) return null;
+    
     let columns = Object.keys(data[0]);
     if (columns.includes('has_booked_prediction')) {
       columns = columns.filter(c => c !== 'has_booked_prediction').concat(['has_booked_prediction']);
     }
+    
     return (
       <Card className="mb-4">
         <Card.Header>
-          <h5 className="mb-0">{title}</h5>
+          <h5 className="mb-0">
+            {title}
+            {filterLoading && (
+              <Spinner animation="border" size="sm" className="ms-2" />
+            )}
+          </h5>
         </Card.Header>
         <Card.Body className="p-0">
           <div className="table-responsive">
@@ -186,99 +301,87 @@ function App() {
     );
   };
 
-  const renderModelStatus = () => {
-    if (!fileData) return null;
+  const renderFileRetentionInfo = () => {
+    if (!fileInfo) return null;
 
-    const { available_models, missing_models, unique_projects } = fileData;
-    const totalProjects = unique_projects.length;
-    const availableCount = available_models.length;
-    const missingCount = missing_models.length;
+    const uploadDate = new Date(fileInfo.upload_timestamp);
+    const deletionDate = new Date(fileInfo.deletion_date);
+    const daysLeft = Math.ceil((deletionDate - new Date()) / (1000 * 60 * 60 * 24));
 
     return (
       <Card className="mb-4">
         <Card.Header>
           <h5 className="mb-0">
-            <FiDatabase className="me-2" />
-            Model Availability
+            <FiClock className="me-2" />
+            File Retention Information
           </h5>
         </Card.Header>
         <Card.Body>
           <Row>
-            <Col md={4}>
-              <div className="text-center">
-                <div className="stats-number text-success">{availableCount}</div>
-                <div className="text-muted">Available Models</div>
-              </div>
+            <Col md={6}>
+              <p><strong>Upload Time:</strong> {uploadDate.toLocaleString()}</p>
+              <p><strong>Deletion Date:</strong> {deletionDate.toLocaleString()}</p>
             </Col>
-            <Col md={4}>
-              <div className="text-center">
-                <div className="stats-number text-danger">{missingCount}</div>
-                <div className="text-muted">Missing Models</div>
-              </div>
-            </Col>
-            <Col md={4}>
-              <div className="text-center">
-                <div className="stats-number text-primary">{totalProjects}</div>
-                <div className="text-muted">Total Projects</div>
-              </div>
+            <Col md={6}>
+              <p><strong>Days Remaining:</strong> 
+                <Badge 
+                  bg={daysLeft > 30 ? 'success' : daysLeft > 7 ? 'warning' : 'danger'}
+                  className="ms-2"
+                >
+                  {daysLeft} days
+                </Badge>
+              </p>
+              <p><strong>Status:</strong> 
+                <Badge bg="info" className="ms-2">{fileInfo.status}</Badge>
+              </p>
             </Col>
           </Row>
-          <div className="mt-3">
-            <h6>Project Details:</h6>
-            <div className="d-flex flex-wrap gap-2">
-              {unique_projects.map((projectId) => {
-                const isAvailable = available_models.includes(projectId);
-                return (
-                  <span
-                    key={projectId}
-                    className={`model-status ${isAvailable ? 'model-available' : 'model-missing'}`}
-                  >
-                    {isAvailable ? <FiCheckCircle className="me-1" /> : <FiXCircle className="me-1" />}
-                    Project {projectId}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
         </Card.Body>
       </Card>
     );
   };
 
-  const renderPredictionStats = () => {
-    if (!predictions) return null;
-
-    const { prediction_stats } = predictions;
+  const renderStorageStats = () => {
+    if (!storageStats) return null;
 
     return (
       <Card className="mb-4">
         <Card.Header>
-          <h5 className="mb-0">Prediction Results</h5>
+          <h5 className="mb-0">
+            <FiInfo className="me-2" />
+            Storage Statistics
+          </h5>
         </Card.Header>
         <Card.Body>
           <Row>
             <Col md={3}>
               <div className="text-center">
-                <div className="stats-number text-primary">{prediction_stats.total_predictions}</div>
-                <div className="text-muted">Total Rows</div>
+                <div className="stats-number text-primary">{storageStats.total_files}</div>
+                <div className="text-muted">Total Files</div>
               </div>
             </Col>
             <Col md={3}>
               <div className="text-center">
-                <div className="stats-number text-success">{prediction_stats.successful_predictions}</div>
-                <div className="text-muted">Successful</div>
+                <div className="stats-number text-info">{storageStats.total_size_mb} MB</div>
+                <div className="text-muted">Total Size</div>
               </div>
             </Col>
             <Col md={3}>
               <div className="text-center">
-                <div className="stats-number text-warning">{prediction_stats.failed_predictions}</div>
-                <div className="text-muted">Failed</div>
+                <div className="stats-number text-success">{storageStats.retention_days}</div>
+                <div className="text-muted">Retention Days</div>
               </div>
             </Col>
             <Col md={3}>
               <div className="text-center">
-                <div className="stats-number text-info">{prediction_stats.prediction_rate}%</div>
-                <div className="text-muted">Success Rate</div>
+                <Button 
+                  variant="outline-secondary" 
+                  size="sm"
+                  onClick={fetchStorageStats}
+                >
+                  <FiInfo className="me-1" />
+                  Refresh
+                </Button>
               </div>
             </Col>
           </Row>
@@ -322,7 +425,7 @@ function App() {
                   <FiUpload size={48} className="text-primary mb-3" />
                   <h4>Drop your file here, or click to select</h4>
                   <p className="text-muted">
-                    Supports CSV and Excel files (max 100,000 rows)
+                    Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
                   </p>
                   <p className="text-muted small">
                     File must contain a "projectid" column
@@ -371,10 +474,29 @@ function App() {
                   </Row>
                 </Card.Body>
               </Card>
-              {(!fileData.preview || fileData.preview.length === 0) ? (
+              
+              {/* Project Filters */}
+              <ProjectFilters
+                projects={availableProjects}
+                selectedProject={selectedProject}
+                onSelect={handleProjectFilter}
+                onReset={handleFilterReset}
+                disabled={loading}
+                className="mb-4"
+              />
+              
+              {/* Data Statistics */}
+              <DataStats
+                data={currentData}
+                title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
+                className="mb-4"
+              />
+              
+              {/* Preview Table */}
+              {(!displayData || displayData.length === 0) ? (
                 <Alert variant="warning">No preview data available for this file.</Alert>
               ) : (
-                renderPreviewTable(fileData.preview, 'File Preview (First & Last 5 Rows)')
+                renderPreviewTable(displayData, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
               )}
             </>
           )}
@@ -394,9 +516,28 @@ function App() {
                   </Row>
                 </Card.Body>
               </Card>
-              {/* Only show Final Prediction Preview, with has_booked_prediction as last column */}
+              
+              {/* Project Filters for Prediction Results */}
+              <ProjectFilters
+                projects={availableProjects}
+                selectedProject={selectedProject}
+                onSelect={handleProjectFilter}
+                onReset={handleFilterReset}
+                disabled={loading}
+                className="mb-4"
+              />
+              
+              {/* Prediction Data Statistics */}
+              <DataStats
+                data={currentData}
+                title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
+                className="mb-4"
+              />
+              
+              {/* Final Prediction Preview */}
               <h5>Final Prediction Preview</h5>
-              {renderPreviewTable(getFinalPreviewWithPrediction(), 'Prediction Results Preview (Raw Data + Prediction)')}
+              {renderPreviewTable(displayData, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
+              
               <Card>
                 <Card.Header>
                   <h5 className="mb-0">
@@ -441,6 +582,13 @@ function App() {
                   Upload New File
                 </Button>
               </div>
+            </>
+          )}
+
+          {fileInfo && (
+            <>
+              {renderFileRetentionInfo()}
+              {renderStorageStats()}
             </>
           )}
         </Col>

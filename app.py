@@ -52,13 +52,20 @@ def upload_file():
         if not allowed_file(str(file.filename)):
             return jsonify({'error': 'Invalid file type. Please upload CSV or Excel files.'}), 400
         
-        # Save file temporarily
+        # Always save as CSV for faster preprocessing
+        ext = file.filename.rsplit('.', 1)[-1].lower()
         filename = secure_filename(str(file.filename))
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(file_path)
+        csv_filename = f"{filename.rsplit('.', 1)[0]}.csv"
+        file_path = os.path.join(UPLOAD_FOLDER, csv_filename)
         
-        # Read the file
-        df = read_file(file_path)
+        # Read the uploaded file and convert to CSV
+        if ext == 'csv':
+            df = pd.read_csv(file.stream)
+        else:
+            df = pd.read_excel(file.stream, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
+        
+        # Save as CSV for faster preprocessing
+        df.to_csv(file_path, index=False)
         
         # Check file size
         if len(df) > MAX_ROWS:
@@ -93,7 +100,7 @@ def upload_file():
                 missing_models.append(int(project_id))
         
         return jsonify({
-            'filename': filename,
+            'filename': csv_filename,
             'total_rows': len(df),
             'preview_data': preview_data,
             'columns': df.columns.tolist(),
@@ -144,10 +151,8 @@ def predict():
         results_filename = f"results_{filename}"
         results_path = os.path.join(UPLOAD_FOLDER, results_filename)
         
-        if filename.endswith('.csv'):
-            df_with_predictions.to_csv(results_path, index=False)
-        else:
-            df_with_predictions.to_excel(results_path, index=False)
+        # Always save results as CSV for consistency
+        df_with_predictions.to_csv(results_path, index=False)
         
         # Calculate prediction statistics
         prediction_stats = {

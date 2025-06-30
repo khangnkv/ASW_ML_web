@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Container, Row, Col, Card, Button, Alert, Spinner, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, ButtonGroup, Table } from 'react-bootstrap';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
@@ -30,6 +30,8 @@ function App() {
   const [fullDataset, setFullDataset] = useState(null);
   const [filteredData, setFilteredData] = useState(null);
   const [filterLoading, setFilterLoading] = useState(false);
+  const [previewNumRows, setPreviewNumRows] = useState(5);
+  const [previewSection, setPreviewSection] = useState('both'); // 'head', 'tail', 'both'
 
   useEffect(() => {
     // Fetch available models on component mount
@@ -113,18 +115,31 @@ function App() {
     return selectedProject ? filteredData : fullDataset;
   }, [selectedProject, filteredData, fullDataset]);
 
-  // Memoized display data for preview (first and last 5 rows)
-  const displayData = useMemo(() => {
+  // --- Preview Controls ---
+  const previewOptions = [5, 10, 50];
+  const sectionOptions = [
+    { value: 'head', label: 'Head' },
+    { value: 'tail', label: 'Tail' },
+    { value: 'both', label: 'Head & Tail' },
+  ];
+
+  // --- Updated previewRows logic ---
+  const previewRows = useMemo(() => {
     if (!currentData || currentData.length === 0) return [];
-    
-    if (currentData.length <= 10) {
-      return currentData;
+    const n = previewNumRows;
+    if (previewSection === 'head') {
+      return currentData.slice(0, n);
+    } else if (previewSection === 'tail') {
+      return currentData.slice(-n);
+    } else { // both
+      if (currentData.length <= 2 * n) {
+        return currentData;
+      }
+      const firstN = currentData.slice(0, n);
+      const lastN = currentData.slice(-n);
+      return [...firstN, ...lastN];
     }
-    
-    const first5 = currentData.slice(0, 5);
-    const last5 = currentData.slice(-5);
-    return [...first5, ...last5];
-  }, [currentData]);
+  }, [currentData, previewNumRows, previewSection]);
 
   const onDrop = async (acceptedFiles) => {
     if (acceptedFiles.length === 0) return;
@@ -143,17 +158,17 @@ function App() {
         },
       });
       
-      // Cache the full dataset for filtering
-      setFullDataset(response.data.preview);
-      setFilteredData(response.data.preview);
+      // Cache the full dataset for filtering (all rows)
+      setFullDataset(response.data.full_dataset);
+      setFilteredData(response.data.full_dataset);
       
-      // Extract available projects
-      const projects = extractProjects(response.data.preview);
+      // Extract available projects from the full dataset
+      const projects = extractProjects(response.data.full_dataset);
       setAvailableProjects(projects);
       
       setFileData({
         filename: response.data.filename,
-        preview: response.data.preview,
+        preview: response.data.preview,  // Keep preview for display
         originalName: file.name,
       });
       setFileInfo(response.data.file_info);
@@ -164,7 +179,8 @@ function App() {
       
       console.log('Uploaded fileData:', {
         filename: response.data.filename,
-        preview: response.data.preview,
+        previewRows: response.data.preview.length,
+        fullDatasetRows: response.data.full_dataset.length,
         originalName: file.name,
         fileInfo: response.data.file_info,
         availableProjects: projects,
@@ -195,8 +211,8 @@ function App() {
         filename: fileData.filename,
       });
       
-      // Cache the full prediction dataset
-      const fullPredictionData = response.data.preview.final;
+      // Cache the full prediction dataset for filtering (all rows)
+      const fullPredictionData = response.data.full_dataset;
       setFullDataset(fullPredictionData);
       setFilteredData(fullPredictionData);
       
@@ -216,23 +232,18 @@ function App() {
     }
   };
 
+  // --- Export logic ---
   const exportResults = async (format) => {
     if (!predictions) return;
-
     try {
-      if (format === 'json') {
-        const response = await axios.get(`/api/export/${format}/${predictions.results_filename}`);
-        const blob = new Blob([JSON.stringify(response.data, null, 2)], {
-          type: 'application/json',
-        });
-        saveAs(blob, `predictions_${fileData.filename.split('.')[0]}.json`);
-      } else {
-        const response = await axios.get(`/api/export/${format}/${predictions.results_filename}`, {
-          responseType: 'blob',
-        });
-        const extension = format === 'csv' ? 'csv' : 'xlsx';
-        saveAs(response.data, `predictions_${fileData.filename.split('.')[0]}.${extension}`);
-      }
+      const response = await axios.get(`/api/export/${format}/${predictions.results_filename}`, {
+        responseType: 'blob',
+      });
+      let extension = format;
+      if (format === 'xlsx') extension = 'xlsx';
+      if (format === 'csv') extension = 'csv';
+      if (format === 'json') extension = 'json';
+      saveAs(response.data, `predictions_${fileData.filename.split('.')[0]}.${extension}`);
     } catch (error) {
       setError('Error exporting results');
     }
@@ -300,6 +311,31 @@ function App() {
       </Card>
     );
   };
+
+  // --- Preview controls UI ---
+  const renderPreviewControls = () => (
+    <div className="d-flex align-items-center gap-3 mb-2">
+      <span>Preview:</span>
+      <Dropdown as={ButtonGroup} onSelect={val => setPreviewNumRows(Number(val))}>
+        <Button variant="outline-primary">{previewNumRows} rows</Button>
+        <Dropdown.Toggle split variant="outline-primary" id="dropdown-split-basic" />
+        <Dropdown.Menu>
+          {previewOptions.map(opt => (
+            <Dropdown.Item key={opt} eventKey={opt}>{opt} rows</Dropdown.Item>
+          ))}
+        </Dropdown.Menu>
+      </Dropdown>
+      <Dropdown as={ButtonGroup} onSelect={val => setPreviewSection(val)}>
+        <Button variant="outline-secondary">{sectionOptions.find(o => o.value === previewSection)?.label}</Button>
+        <Dropdown.Toggle split variant="outline-secondary" id="dropdown-split-section" />
+        <Dropdown.Menu>
+          {sectionOptions.map(opt => (
+            <Dropdown.Item key={opt.value} eventKey={opt.value}>{opt.label}</Dropdown.Item>
+          ))}
+        </Dropdown.Menu>
+      </Dropdown>
+    </div>
+  );
 
   const renderFileRetentionInfo = () => {
     if (!fileInfo) return null;
@@ -390,6 +426,69 @@ function App() {
     );
   };
 
+  // --- Compute and Render Prediction Statistics (per project or overall) ---
+  const renderPredictionStats = () => {
+    // Use filtered data (currentData) for per-project stats
+    const data = currentData;
+    if (!data || data.length === 0) return null;
+    const total = data.length;
+    const totalCols = data[0] ? Object.keys(data[0]).length : 0;
+    // Count numeric and categorical columns
+    let numericCols = 0, categoricalCols = 0;
+    if (data[0]) {
+      Object.keys(data[0]).forEach(col => {
+        const val = data[0][col];
+        if (typeof val === 'number' && !isNaN(val)) numericCols++;
+        else categoricalCols++;
+      });
+    }
+    const predCol = data.map(row => row.has_booked_prediction);
+    const missingCount = predCol.filter(v => v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))).length;
+    // const missingPct = total ? ((100 * missingCount) / total).toFixed(2) : '0.00';
+    // Count each class
+    const classCounts = { '0': 0, '1': 0 };
+    predCol.forEach(v => {
+      if (v === 0 || v === '0') classCounts['0']++;
+      else if (v === 1 || v === '1') classCounts['1']++;
+    });
+    // Percent for each class
+    const classPercents = {
+      '0': total ? ((100 * classCounts['0']) / total).toFixed(2) + '%' : '0.00%',
+      '1': total ? ((100 * classCounts['1']) / total).toFixed(2) + '%' : '0.00%'
+    };
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <h5 className="mb-0" style={{ color: 'var(--bs-body-color)' }}>Project {selectedProject ? selectedProject : 'All'} Prediction Statistics</h5>
+        </Card.Header>
+        <Card.Body>
+          <div style={{ fontSize: '1.1rem', color: 'var(--bs-body-color)' }}>
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginBottom: 8 }}>
+              <div><span style={{ color: '#1976d2', fontWeight: 700, fontSize: 22 }}>{total}</span><br />Total Rows</div>
+              <div><span style={{ color: '#00bcd4', fontWeight: 700, fontSize: 22 }}>{totalCols}</span><br />Total Columns</div>
+              <div><span style={{ color: '#43a047', fontWeight: 700, fontSize: 22 }}>{numericCols}</span><br />Numeric Columns</div>
+              <div><span style={{ color: '#ffc107', fontWeight: 700, fontSize: 22 }}>{categoricalCols}</span><br />Categorical Columns</div>
+            </div>
+            <div style={{ margin: '12px 0' }}>
+              <span style={{ fontWeight: 600, background: 'var(--bs-secondary-bg, #f5f5f5)', borderRadius: 16, padding: '6px 16px', display: 'inline-block', color: 'var(--bs-body-color)' }}>
+                {missingCount.toLocaleString()} missing values detected
+              </span>
+            </div>
+            <div style={{ marginTop: 12, fontWeight: 600 }}>Prediction Results:</div>
+            <div style={{ marginLeft: 12, marginTop: 4 }}>
+              <div style={{ color: '#388e3c', marginBottom: 2 }}>
+                Likely to book: <span style={{ fontWeight: 700 }}>{classCounts['1']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['1']})</span>
+              </div>
+              <div style={{ color: '#d32f2f' }}>
+                Unlikely to book: <span style={{ fontWeight: 700 }}>{classCounts['0']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['0']})</span>
+              </div>
+            </div>
+          </div>
+        </Card.Body>
+      </Card>
+    );
+  };
+
   return (
     <Container fluid className="upload-container">
       <button
@@ -424,10 +523,10 @@ function App() {
                   <input {...getInputProps()} />
                   <FiUpload size={48} className="text-primary mb-3" />
                   <h4>Drop your file here, or click to select</h4>
-                  <p className="text-muted">
+                  <p className="text-muted" style={{ color: 'var(--bs-body-color)' }}>
                     Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
                   </p>
-                  <p className="text-muted small">
+                  <p className="text-muted small" style={{ color: 'var(--bs-body-color)' }}>
                     File must contain a "projectid" column
                   </p>
                 </div>
@@ -492,11 +591,12 @@ function App() {
                 className="mb-4"
               />
               
+              {renderPreviewControls()}
               {/* Preview Table */}
-              {(!displayData || displayData.length === 0) ? (
+              {(!previewRows || previewRows.length === 0) ? (
                 <Alert variant="warning">No preview data available for this file.</Alert>
               ) : (
-                renderPreviewTable(displayData, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
+                renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
               )}
             </>
           )}
@@ -516,7 +616,8 @@ function App() {
                   </Row>
                 </Card.Body>
               </Card>
-              
+              {/* --- New Prediction Statistics Card --- */}
+              {renderPredictionStats()}
               {/* Project Filters for Prediction Results */}
               <ProjectFilters
                 projects={availableProjects}
@@ -534,9 +635,10 @@ function App() {
                 className="mb-4"
               />
               
+              {renderPreviewControls()}
               {/* Final Prediction Preview */}
               <h5>Final Prediction Preview</h5>
-              {renderPreviewTable(displayData, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
+              {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
               
               <Card>
                 <Card.Header>

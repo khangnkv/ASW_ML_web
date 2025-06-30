@@ -38,6 +38,15 @@ def sanitize_preview(preview):
         return val
     return [{k: safe(v) for k, v in row.items()} for row in preview]
 
+def sanitize_records(records):
+    def safe(val):
+        if pd.isna(val):
+            return ""
+        if isinstance(val, (pd.Timestamp, datetime)):
+            return str(val)
+        return val
+    return [{k: safe(v) for k, v in row.items()} for row in records]
+
 # Health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -88,7 +97,7 @@ def export_results(format, filename):
         elif format == 'xlsx':
             # Return Excel file
             output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
                 df.to_excel(writer, index=False, sheet_name='Predictions')
             output.seek(0)
             return send_file(
@@ -131,15 +140,20 @@ def upload_uuid():
         # Store file metadata with retention manager
         file_info = retention_manager.store_file(uuid_name, file.filename)
         
-        preview = get_raw_preview(df, n=5).to_dict(orient='records')
-        preview = sanitize_preview(preview)
+        # Get preview for display (first and last 5 rows)
+        preview = sanitize_records(get_raw_preview(df, n=5).to_dict(orient='records'))
+        # Get full dataset for filtering (all rows)
+        full_dataset = sanitize_records(df.to_dict(orient='records'))
+        
         print("File saved to:", save_path)
         print("DataFrame shape:", df.shape)
-        print("Preview data:", preview)
+        print("Preview data rows:", len(preview))
+        print("Full dataset rows:", len(full_dataset))
         
         return jsonify({
             'filename': uuid_name, 
             'preview': preview,
+            'full_dataset': full_dataset,  # Add full dataset for filtering
             'file_info': file_info
         })
     except Exception as e:
@@ -158,15 +172,16 @@ def predict_workflow():
     try:
         # 1. Raw preview
         raw_df = pd.read_csv(upload_path) if filename.endswith('.csv') else pd.read_excel(upload_path)
-        raw_preview = get_raw_preview(raw_df, n=5).to_dict(orient='records')
-        raw_preview = sanitize_preview(raw_preview)
+        raw_preview = sanitize_records(get_raw_preview(raw_df, n=5).to_dict(orient='records'))
         # 2. Preprocessing (25%)
         processed_df = preprocess_data(str(upload_path))
-        processed_preview = get_raw_preview(processed_df, n=5).to_dict(orient='records')
-        processed_preview = sanitize_preview(processed_preview)
+        # Ensure processed_df is a DataFrame
+        if not isinstance(processed_df, pd.DataFrame):
+            processed_df = pd.DataFrame(processed_df)
+        processed_preview = sanitize_records(get_raw_preview(processed_df, n=5).to_dict(orient='records'))
         # 3. Prediction (50%)
         # --- Feature validation and logging ---
-        projectids = processed_df['projectid'].unique()
+        projectids = processed_df['projectid'].unique() if 'projectid' in processed_df.columns else []
         missing_features_report = {}
         for pid in projectids:
             try:
@@ -182,14 +197,21 @@ def predict_workflow():
             return jsonify({'error': f'Missing required features for prediction', 'details': missing_features_report, 'columns': list(processed_df.columns)}), 400
         print('Columns before prediction:', list(processed_df.columns))
         pred_df = predictor.predict(processed_df, log_progress=False)
-        final_preview = get_raw_preview(pred_df, n=5).to_dict(orient='records')
-        final_preview = sanitize_preview(final_preview)
+        if not isinstance(pred_df, pd.DataFrame):
+            pred_df = pd.DataFrame(pred_df)
+        final_preview = sanitize_records(get_raw_preview(pred_df, n=5).to_dict(orient='records'))
         # 4. Stats
         pred_col = pred_df['has_booked_prediction']
+        total = len(pred_col)
+        missing_count = int(pred_col.isna().sum())
+        missing_pct = round(100 * missing_count / total, 2) if total else 0.0
         pred_dist = pred_col.value_counts(dropna=False).to_dict()
+        pred_dist_pct = {str(k): f"{round(100*v/total,2)}%" for k, v in pred_col.value_counts(dropna=False).items()}
         stats = {
-            'rows_processed': int(len(pred_df)),
-            'prediction_distribution': pred_dist
+            'rows_processed': total,
+            'missing_predictions': {'count': missing_count, 'percent': f"{missing_pct}%"},
+            'prediction_distribution': pred_dist,
+            'prediction_distribution_percent': pred_dist_pct
         }
         # 5. Export formats
         export_formats = ['csv', 'xlsx', 'json']
@@ -198,16 +220,39 @@ def predict_workflow():
         results_path = UPLOADS_DIR / results_filename
         pred_df.to_csv(results_path, index=False)
         # 7. Response
-        return jsonify({
-            'preview': {
-                'raw': raw_preview,
-                'processed': processed_preview,
-                'final': final_preview
-            },
-            'export_formats': export_formats,
-            'stats': stats,
-            'results_filename': results_filename
-        })
+        try:
+            # Instead of sending pred_df (which may include raw columns), send only the preprocessed features + prediction
+            # Get the features used for prediction for all projects
+            all_features = set()
+            for pid in predictor.models:
+                model, features = predictor.models[pid]
+                all_features.update(features)
+            # Ensure all features are present in pred_df
+            feature_cols = [f for f in all_features if f in pred_df.columns]
+            # Always include projectid and has_booked_prediction
+            display_cols = ['projectid'] + feature_cols + ['has_booked_prediction']
+            display_cols = [c for c in display_cols if c in pred_df.columns]
+            print(f"[DEBUG] display_cols: {display_cols}")
+            preprocessed_plus_pred = pred_df[display_cols].copy()
+            print(f"[DEBUG] preprocessed_plus_pred shape: {preprocessed_plus_pred.shape}")
+            if preprocessed_plus_pred.empty:
+                return jsonify({'error': 'No preprocessed data available for display. Check feature extraction.'}), 500
+            return jsonify({
+                'preview': {
+                    'raw': raw_preview,
+                    'processed': processed_preview,
+                    'final': final_preview
+                },
+                'full_dataset': sanitize_records(preprocessed_plus_pred.to_dict(orient='records')),
+                'export_formats': export_formats,
+                'stats': stats,
+                'results_filename': results_filename
+            })
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[ERROR] Exception in response block: {e}\n{tb}")
+            return jsonify({'error': f'Workflow error (response block): {e}', 'traceback': tb}), 500
     except Exception as e:
         import traceback
         tb = traceback.format_exc()

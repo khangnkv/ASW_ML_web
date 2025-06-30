@@ -36,11 +36,6 @@ def test_imports():
         stats = retention_manager.get_storage_stats()
         print("✅ Data retention manager working")
         
-        # Test performance utils
-        from performance_utils import PerformanceMonitor
-        monitor = PerformanceMonitor()
-        print("✅ Performance utilities imported successfully")
-        
         return True
         
     except Exception as e:

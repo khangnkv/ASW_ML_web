@@ -5,13 +5,13 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import pandas as pd
-from model.predictor import MLPredictor
 import sys
 import os
 import io
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from model.predictor import MLPredictor
 from preprocessing import preprocess_data, get_raw_preview
-from data_retention import retention_manager
+from backend.data_retention import retention_manager
 
 app = Flask(__name__)
 # Enhanced CORS configuration
@@ -23,8 +23,8 @@ CORS(app, resources={
     }
 })
 
-UPLOADS_DIR = Path('uploads')
-PREPROCESSED_DIR = Path('backend/preprocessed_unencoded')
+UPLOADS_DIR = Path('../uploads') if Path('../uploads').exists() else Path('uploads')
+PREPROCESSED_DIR = Path('preprocessed_unencoded')
 PREPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 predictor = MLPredictor()
@@ -58,7 +58,7 @@ def health_check():
 def get_models():
     """Get available models"""
     try:
-        model_dir = Path('model')
+        model_dir = Path('../model') if Path('../model').exists() else Path('model')
         model_files = list(model_dir.glob('*.pkl'))
         available_models = [f.stem for f in model_files]
         return jsonify({
@@ -302,4 +302,13 @@ def manual_cleanup():
         return jsonify({'error': f'Error during cleanup: {e}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    print("=" * 50)
+    print("  ML Prediction System Backend")
+    print("=" * 50)
+    print("Backend server starting...")
+    print("Health check: http://localhost:5000/api/health")
+    print("Models endpoint: http://localhost:5000/api/models")
+    print("=" * 50)
+    
+    # Run in production mode to prevent auto-reload issues
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)

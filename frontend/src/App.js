@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, ButtonGroup, Table } from 'react-bootstrap';
+import React, { useState, useEffect } from 'react';
+import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, ButtonGroup } from 'react-bootstrap';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
@@ -65,7 +65,7 @@ function App() {
   };
 
   // Extract unique projects from data
-  const extractProjects = useCallback((data) => {
+  const extractProjects = (data) => {
     if (!data || data.length === 0) return [];
     
     const projects = new Set();
@@ -76,10 +76,10 @@ function App() {
     });
     
     return Array.from(projects);
-  }, []);
+  };
 
   // Filter data by project
-  const filterDataByProject = useCallback((data, projectId) => {
+  const filterDataByProject = (data, projectId) => {
     if (!data || !projectId) return data;
     
     setFilterLoading(true);
@@ -92,28 +92,26 @@ function App() {
       setFilteredData(filtered);
       setFilterLoading(false);
     }, 0);
-  }, []);
+  };
 
   // Handle project selection
-  const handleProjectFilter = useCallback((projectId) => {
+  const handleProjectFilter = (projectId) => {
     setSelectedProject(projectId);
     if (projectId) {
       filterDataByProject(fullDataset, projectId);
     } else {
       setFilteredData(fullDataset);
     }
-  }, [fullDataset, filterDataByProject]);
+  };
 
   // Handle filter reset
-  const handleFilterReset = useCallback(() => {
+  const handleFilterReset = () => {
     setSelectedProject(null);
     setFilteredData(fullDataset);
-  }, [fullDataset]);
+  };
 
-  // Memoized current data (either filtered or full dataset)
-  const currentData = useMemo(() => {
-    return selectedProject ? filteredData : fullDataset;
-  }, [selectedProject, filteredData, fullDataset]);
+  // Current data (either filtered or full dataset)
+  const currentData = selectedProject ? filteredData : fullDataset;
 
   // --- Preview Controls ---
   const previewOptions = [5, 10, 50];
@@ -123,8 +121,8 @@ function App() {
     { value: 'both', label: 'Head & Tail' },
   ];
 
-  // --- Updated previewRows logic ---
-  const previewRows = useMemo(() => {
+  // Preview rows logic
+  const getPreviewRows = () => {
     if (!currentData || currentData.length === 0) return [];
     const n = previewNumRows;
     if (previewSection === 'head') {
@@ -139,7 +137,9 @@ function App() {
       const lastN = currentData.slice(-n);
       return [...firstN, ...lastN];
     }
-  }, [currentData, previewNumRows, previewSection]);
+  };
+  
+  const previewRows = getPreviewRows();
 
   const onDrop = async (acceptedFiles) => {
     if (acceptedFiles.length === 0) return;

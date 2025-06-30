@@ -33,11 +33,11 @@ def read_data(data_path, table_path):
     df = pd.merge(pre_df, table, on='projectid', how='left')
     return df
 
-def sample_projects(df):
-    df_sampled = df.groupby('projectid', group_keys=False).apply(
-        lambda x: x.sample(n=min(len(x), 2), random_state=42)
-    )
-    return df_sampled.copy()
+# def sample_projects(df):
+#     df_sampled = df.groupby('projectid', group_keys=False).apply(
+#         lambda x: x.sample(n=min(len(x), 2), random_state=42)
+#     )
+#     return df_sampled.copy()
 
 def fix_year(dt_str):
     if pd.isna(dt_str):
@@ -50,25 +50,53 @@ def fix_year(dt_str):
         return pd.NaT
 
 def preprocess_dates(df):
-    df['questiondate'] = df['questiondate'].apply(fix_year)
-    df['bookingdate'] = df['bookingdate'].apply(fix_year)
-    df['has_booked'] = df['bookingdate'].notna().astype(np.int8)  # Faster and memory-efficient
+    """Process dates by converting Buddhist calendar to Gregorian"""
+    df = df.copy()
+    
+    # Process questiondate
+    if 'questiondate' in df.columns:
+        df['questiondate'] = df['questiondate'].apply(fix_year)
+        
+    # Process bookingdate  
+    if 'bookingdate' in df.columns:
+        df['bookingdate'] = df['bookingdate'].apply(fix_year)
+    
+    # Add has_booked column
+    df['has_booked'] = df['bookingdate'].notna().astype(int)
     return df
 
 def add_seasonal_features(df, date_column):
-    df['hour'] = df[date_column].dt.hour
-    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
-    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+    """Add seasonal features from a datetime column"""
+    if date_column not in df.columns:
+        return df
+    
+    # Ensure the column is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df[date_column]):
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+    
+    # Only process rows with valid dates
+    valid_mask = df[date_column].notna()
+    
+    if not valid_mask.any():
+        return df
+    
+    # Add time-based features
+    df['hour'] = np.where(valid_mask, df[date_column].dt.hour, np.nan)
+    df['hour_sin'] = np.where(valid_mask, np.sin(2 * np.pi * df['hour'] / 24), np.nan)
+    df['hour_cos'] = np.where(valid_mask, np.cos(2 * np.pi * df['hour'] / 24), np.nan)
+    df['day'] = np.where(valid_mask, df[date_column].dt.day, np.nan)
+    df['month'] = np.where(valid_mask, df[date_column].dt.month, np.nan)
+    df['quarter'] = np.where(valid_mask, df[date_column].dt.quarter, np.nan)
+    df['year'] = np.where(valid_mask, df[date_column].dt.year, np.nan)
+    df['week'] = np.where(valid_mask, df[date_column].dt.isocalendar().week, np.nan)
+    df['day_of_week'] = np.where(valid_mask, df[date_column].dt.dayofweek, np.nan)
+    df['is_weekend'] = np.where(valid_mask, (df[date_column].dt.dayofweek >= 5).astype(int), 0)
+    df['day_of_year'] = np.where(valid_mask, df[date_column].dt.dayofyear, np.nan)
+    df['season'] = np.where(valid_mask, df[date_column].dt.month % 12 // 3 + 1, np.nan)
+    
+    # Drop temporary hour column
     df.drop(columns=['hour'], inplace=True)
-    df['day'] = df[date_column].dt.day
-    df['month'] = df[date_column].dt.month
-    df['quarter'] = df[date_column].dt.quarter
-    df['year'] = df[date_column].dt.year
-    df['week'] = df[date_column].dt.isocalendar().week
-    df['day_of_week'] = df[date_column].dt.dayofweek
-    df['is_weekend'] = (df[date_column].dt.dayofweek >= 5).astype(int)
-    df['day_of_year'] = df[date_column].dt.dayofyear
-    df['season'] = df[date_column].dt.month % 12 // 3 + 1
+    
     return df
 
 def create_bin_assignment_functions():
@@ -163,16 +191,76 @@ def create_bin_assignment_functions():
     }
 
 def clean_financial_columns(df):
-    processors = create_bin_assignment_functions()
-
+    """Optimized financial column processing using vectorized operations"""
+    df = df.copy()  # Work on copy to avoid side effects
+    
+    # Process all financial columns in batch
+    financial_columns = {
+        'purchase_budget': 'budget',
+        'family_monthly_income': 'family_income', 
+        'individual_monthly_income_baht': 'individual_income'
+    }
+    
+    # Define bins once
+    budget_bins = [
+        (0, 1.01, "≤ 1.0M"), (1.01, 1.51, "1.01 - 1.5M"), (1.51, 2.01, "1.51 - 2.0M"),
+        (2.01, 2.51, "2.01 - 2.5M"), (2.51, 3.01, "2.51 - 3.0M"), (3.01, 3.51, "3.01 - 3.5M"),
+        (3.51, 4.01, "3.51 - 4.0M"), (4.01, 4.51, "4.01 - 4.5M"), (4.51, 5.01, "4.51 - 5.0M"),
+        (5.01, 6.01, "5.01 - 6.0M"), (6.01, 7.01, "6.01 - 7.0M"), (7.01, 8.01, "7.01 - 8.0M"),
+        (8.01, 9.01, "8.01 - 9.0M"), (9.01, 10.01, "9.01 - 10.0M"), (10.01, 11.01, "10.01 - 11.0M"),
+        (11.01, 12.01, "11.01 - 12.0M"), (12.01, 13.01, "12.01 - 13.0M"), (13.01, 14.01, "13.01 - 14.0M"),
+        (14.01, 15.01, "14.01 - 15.0M"), (15.01, 16.01, "15.01 - 16.0M"), (16.01, 17.01, "16.01 - 17.0M"),
+        (17.01, 20.01, "17.01 - 20.0M"), (20.01, 25.01, "20.01 - 25.0M"), (25.01, float("inf"), "≥ 25.01M")
+    ]
+    
+    income_bins = [
+        (0, 20001, '≤ 20,000'), (20001, 35001, '20,001 - 35,000'), (35001, 50001, '35,001 - 50,000'),
+        (50001, 65001, '50,001 - 65,000'), (65001, 80001, '65,001 - 80,000'), (80001, 100001, '80,001 - 100,000'),
+        (100001, 120001, '100,001 - 120,000'), (120001, 140001, '120,001 - 140,000'), (140001, 160001, '140,001 - 160,000'),
+        (160001, 180001, '160,001 - 180,000'), (180001, 200001, '180,001 - 200,000'), (200001, 300001, '200,001 - 300,000'),
+        (300001, 400001, '300,001 - 400,000'), (400001, float('inf'), '≥ 400,001')
+    ]
+    
+    individual_income_bins = [
+        (0, 15001, '≤ 15,000'), (15001, 20001, '15,001 - 20,000'), (20001, 30001, '20,001 - 30,000'),
+        (30001, 40001, '30,001 - 40,000'), (40001, 50001, '40,001 - 50,000'), (50001, 65001, '50,001 - 65,000'),
+        (65001, 80001, '65,001 - 80,000'), (80001, 100001, '80,001 - 100,000'), (100001, 120001, '100,001 - 120,000'),
+        (120001, 150001, '120,001 - 150,000'), (150001, 200001, '150,001 - 200,000'), (200001, 300001, '200,001 - 300,000'),
+        (300001, 400001, '300,001 - 400,000'), (400401, float('inf'), '≥ 400,001')
+    ]
+    
+    def vectorized_binning(series, bins):
+        """Apply binning using vectorized operations"""
+        if series.empty:
+            return series
+            
+        # Clean and convert to numeric
+        cleaned = (series.astype(str)
+                  .str.replace(',', '', regex=False)
+                  .str.replace('บาท', '', regex=False) 
+                  .str.replace('ล้าน', '', regex=False)
+                  .str.strip())
+        
+        # Extract numeric values using regex
+        numeric_vals = pd.to_numeric(cleaned.str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+        
+        # Apply binning
+        result = pd.Series(['Missing'] * len(series), index=series.index)
+        for low, high, label in bins:
+            mask = (numeric_vals >= low) & (numeric_vals < high)
+            result[mask] = label
+            
+        return result
+    
+    # Apply optimized binning
     if 'purchase_budget' in df.columns:
-        df['purchase_budget'] = df['purchase_budget'].apply(processors['process_budget'])
-
+        df['purchase_budget'] = vectorized_binning(df['purchase_budget'], budget_bins)
+    
     if 'family_monthly_income' in df.columns:
-        df['family_monthly_income'] = df['family_monthly_income'].apply(processors['process_family_income'])
-
+        df['family_monthly_income'] = vectorized_binning(df['family_monthly_income'], income_bins)
+        
     if 'individual_monthly_income_baht' in df.columns:
-        df['individual_monthly_income_baht'] = df['individual_monthly_income_baht'].apply(processors['process_individual_income'])
+        df['individual_monthly_income_baht'] = vectorized_binning(df['individual_monthly_income_baht'], individual_income_bins)
 
     return df
 
@@ -219,7 +307,7 @@ def export_data(df, output_csv, output_excel):
 
 def run_pipeline(data_path, table_path, output_csv, output_excel):
     df = read_data(data_path, table_path)
-    df = sample_projects(df)
+    # df = sample_projects(df)
     df = preprocess_dates(df)
     df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
     df = add_seasonal_features(df, 'questiondate')

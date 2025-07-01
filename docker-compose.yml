@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -11,11 +9,15 @@ services:
     volumes:
       - ./backend/uploads:/app/backend/uploads
       - ./backend/preprocessed_unencoded:/app/backend/preprocessed_unencoded
-      - ./model:/app/model
+      - ./backend/model:/app/model
     environment:
       - PYTHONUNBUFFERED=1
     depends_on:
       - frontend
+    command: >
+      sh -c "mkdir -p /app/backend/uploads /app/backend/preprocessed_unencoded &&
+      chmod -R 777 /app/backend/uploads /app/backend/preprocessed_unencoded &&
+      python backend/app_workflow.py"
 
   frontend:
     build:

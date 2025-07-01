@@ -25,6 +25,10 @@ COPY backend/notebooks/project_info/ProjectID_Detail.xlsx ./backend/notebooks/pr
 COPY preprocessing.py ./preprocessing.py
 COPY run_backend_only.py ./run_backend_only.py
 
+# Ensure upload directories exist and are writable
+RUN mkdir -p ./backend/uploads ./backend/preprocessed_unencoded \
+    && chmod -R 777 ./backend/uploads ./backend/preprocessed_unencoded
+
 # Expose backend port
 EXPOSE 5000
 

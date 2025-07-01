@@ -116,50 +116,50 @@ def export_results(format, filename):
 # Helper: Save uploaded file with UUID
 @app.route('/api/upload_uuid', methods=['POST'])
 def upload_uuid():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    file = request.files['file']
-    if not file or not file.filename:
-        return jsonify({'error': 'No file selected'}), 400
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext not in {'csv', 'xlsx', 'xls'}:
-        return jsonify({'error': 'Invalid file type'}), 400
-    
-    # Always save as CSV for faster preprocessing
-    uuid_name = f"{uuid.uuid4()}.csv"
-    save_path = UPLOADS_DIR / uuid_name
-    
-    # Read the uploaded file and convert to CSV
+    import traceback
+    print("[UPLOAD] /api/upload_uuid endpoint called")
     try:
-        if ext == 'csv':
-            df = pd.read_csv(file.stream)
-        else:
-            df = pd.read_excel(file.stream, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
-        
-        # Save as CSV for faster preprocessing
-        df.to_csv(save_path, index=False)
-        
-        # Store file metadata with retention manager
-        file_info = retention_manager.store_file(uuid_name, file.filename)
-        
-        # Get preview for display (first and last 5 rows)
-        preview = sanitize_records(get_raw_preview(df, n=5).to_dict(orient='records'))
-        # Get full dataset for filtering (all rows)
-        full_dataset = sanitize_records(df.to_dict(orient='records'))
-        
-        print("File saved to:", save_path)
-        print("DataFrame shape:", df.shape)
-        print("Preview data rows:", len(preview))
-        print("Full dataset rows:", len(full_dataset))
-        
-        return jsonify({
-            'filename': uuid_name, 
-            'preview': preview,
-            'full_dataset': full_dataset,  # Add full dataset for filtering
-            'file_info': file_info
-        })
+        if 'file' not in request.files:
+            print("[UPLOAD][ERROR] No file part in request.files")
+            return jsonify({'error': 'No file provided'}), 400
+        file = request.files['file']
+        print(f"[UPLOAD] Received file: {getattr(file, 'filename', None)}")
+        if not file or not file.filename:
+            print("[UPLOAD][ERROR] No file selected")
+            return jsonify({'error': 'No file selected'}), 400
+        ext = file.filename.rsplit('.', 1)[-1].lower()
+        if ext not in {'csv', 'xlsx', 'xls'}:
+            print(f"[UPLOAD][ERROR] Invalid file type: {ext}")
+            return jsonify({'error': 'Invalid file type'}), 400
+        uuid_name = f"{uuid.uuid4()}.csv"
+        save_path = UPLOADS_DIR / uuid_name
+        print(f"[UPLOAD] Saving file as: {save_path}")
+        try:
+            if ext == 'csv':
+                df = pd.read_csv(file.stream)
+            else:
+                df = pd.read_excel(file.stream, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
+            print(f"[UPLOAD] DataFrame loaded, shape: {df.shape}")
+            df.to_csv(save_path, index=False)
+            print(f"[UPLOAD] File saved to: {save_path}")
+            file_info = retention_manager.store_file(uuid_name, file.filename)
+            preview = sanitize_records(get_raw_preview(df, n=5).to_dict(orient='records'))
+            full_dataset = sanitize_records(df.to_dict(orient='records'))
+            print(f"[UPLOAD] Preview rows: {len(preview)}, Full dataset rows: {len(full_dataset)}")
+            return jsonify({
+                'filename': uuid_name, 
+                'preview': preview,
+                'full_dataset': full_dataset,
+                'file_info': file_info
+            })
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[UPLOAD][ERROR] Exception during file processing: {e}\n{tb}")
+            return jsonify({'error': f'Error reading file: {e}', 'traceback': tb}), 400
     except Exception as e:
-        return jsonify({'error': f'Error reading file: {e}'}), 400
+        tb = traceback.format_exc()
+        print(f"[UPLOAD][ERROR] Unexpected exception: {e}\n{tb}")
+        return jsonify({'error': f'Unexpected error: {e}', 'traceback': tb}), 500
 
 # Main workflow endpoint
 @app.route('/api/predict_workflow', methods=['POST'])

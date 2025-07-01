@@ -1,14 +1,14 @@
-import os
 import json
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+import os
 from typing import Dict, List, Optional
 import threading
 import time
 
 class DataRetentionManager:
-    def __init__(self, uploads_dir: str = "uploads", retention_days: int = 90):
+    def __init__(self, uploads_dir: str = None, retention_days: int = 90):
         """
         Initialize the data retention manager.
         
@@ -16,7 +16,14 @@ class DataRetentionManager:
             uploads_dir: Directory to store uploaded files
             retention_days: Number of days to keep files before deletion
         """
-        self.uploads_dir = Path(uploads_dir)
+        backend_dir = Path(__file__).parent
+        if uploads_dir is None:
+            uploads_dir = backend_dir / 'uploads'
+        else:
+            uploads_dir = Path(uploads_dir)
+            if not uploads_dir.is_absolute():
+                uploads_dir = backend_dir / uploads_dir
+        self.uploads_dir = uploads_dir
         self.retention_days = retention_days
         self.metadata_file = self.uploads_dir / "file_metadata.json"
         self.metadata: Dict[str, Dict] = {}
@@ -177,4 +184,4 @@ class DataRetentionManager:
         print(f"🔄 Started cleanup thread (runs every hour, retention: {self.retention_days} days)")
 
 # Global instance
-retention_manager = DataRetentionManager() 
+retention_manager = DataRetentionManager()

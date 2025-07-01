@@ -124,6 +124,41 @@ python start_frontend.py
    python app.py
    ```
 
+## 🚀 Running with Docker (Recommended for All Platforms)
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac/Linux)
+- [Docker Compose](https://docs.docker.com/compose/)
+
+### Quick Start
+
+1. **Clone the repository:**
+   ```sh
+   git clone <your-repo-url>
+   cd web_dev
+   ```
+
+2. **Build and start the system:**
+   ```sh
+   docker-compose up --build
+   ```
+   This will build both backend and frontend images and start them as containers.
+
+3. **Access the system:**
+   - Backend API: [http://localhost:5000](http://localhost:5000)
+   - Frontend UI: [http://localhost:3000](http://localhost:3000)
+
+4. **Stopping the system:**
+   Press `Ctrl+C` in the terminal, then run:
+   ```sh
+   docker-compose down
+   ```
+
+### Notes
+- Uploaded files and preprocessed data are persisted in the `backend/uploads` and `backend/preprocessed_unencoded` folders on your host machine.
+- You can develop locally as usual; changes to code will require a rebuild (`docker-compose up --build`).
+- For production, you may want to adjust environment variables and volumes as needed.
+
 ## Usage
 
 1. **Upload File**: Drag and drop or click to upload a CSV/Excel file
@@ -268,4 +303,4 @@ This project is licensed under the MIT License.
 For issues and questions:
 1. Check the troubleshooting section
 2. Review the API documentation
-3. Open an issue on GitHub 
+3. Open an issue on GitHub

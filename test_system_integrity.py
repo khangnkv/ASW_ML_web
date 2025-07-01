@@ -23,7 +23,7 @@ def test_imports():
         print("✅ Basic libraries imported successfully")
         
         # Test model predictor
-        from model.predictor import MLPredictor
+        from backend.model.predictor import MLPredictor
         predictor = MLPredictor()
         print(f"✅ MLPredictor loaded with {len(predictor.models)} models")
         

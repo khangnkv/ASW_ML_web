@@ -9,7 +9,7 @@ import sys
 import os
 import io
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.predictor import MLPredictor
+from backend.model.predictor import MLPredictor
 from preprocessing import preprocess_data, get_raw_preview
 from backend.data_retention import retention_manager
 
@@ -23,8 +23,10 @@ CORS(app, resources={
     }
 })
 
-UPLOADS_DIR = Path('../uploads') if Path('../uploads').exists() else Path('uploads')
-PREPROCESSED_DIR = Path('preprocessed_unencoded')
+# Always resolve uploads and preprocessed dirs relative to this file's directory
+BACKEND_DIR = Path(__file__).parent
+UPLOADS_DIR = BACKEND_DIR / 'uploads'
+PREPROCESSED_DIR = BACKEND_DIR / 'preprocessed_unencoded'
 PREPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 predictor = MLPredictor()
@@ -58,7 +60,7 @@ def health_check():
 def get_models():
     """Get available models"""
     try:
-        model_dir = Path('../model') if Path('../model').exists() else Path('model')
+        model_dir = Path('../model')
         model_files = list(model_dir.glob('*.pkl'))
         available_models = [f.stem for f in model_files]
         return jsonify({

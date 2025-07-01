@@ -1,12 +1,11 @@
 # preprocessing.py
 
+from pathlib import Path
+import os
 import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
-import os
-from pathlib import Path
-import uuid
 
 def read_data(data_path, table_path):
     def read_file_by_extension(file_path):
@@ -302,10 +301,12 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     Returns: processed DataFrame (unencoded)
     """
     # Set defaults
+    project_root = Path(__file__).resolve().parent.parent
+    backend_dir = project_root / 'backend'
     if company_data_path is None:
-        company_data_path = str(Path(__file__).parent / 'backend' / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx')
+        company_data_path = backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx'
     if save_dir is None:
-        save_dir = str(Path(__file__).parent / 'backend' / 'preprocessed_unencoded')
+        save_dir = backend_dir / 'preprocessed_unencoded'
     os.makedirs(save_dir, exist_ok=True)
 
     # Read company data
@@ -335,6 +336,7 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
 
     # Preprocessing steps (no encoding)
     df = preprocess_dates(df)
+    #condo only filtering
     df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
     df = add_seasonal_features(df, 'questiondate')
     df = clean_financial_columns(df)
@@ -343,7 +345,7 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     # Save processed file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     fname = Path(filepath).stem
-    out_path = os.path.join(save_dir, f'{fname}_preprocessed_{timestamp}.csv')
+    out_path = Path(save_dir) / f'{fname}_preprocessed_{timestamp}.csv'
     df.to_csv(out_path, index=False)
 
     # Reorder columns: original + new features at end

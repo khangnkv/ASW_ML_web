@@ -85,7 +85,6 @@ tmp/
 *.npz
 
 # Upload directories (contain user data)
-uploads/
 backend/uploads/
 backend/preprocessed_unencoded/
 

@@ -41,7 +41,8 @@ def check_models():
 
 def create_upload_dir():
     """Create uploads directory if it doesn't exist"""
-    upload_dir = Path("uploads")
+    backend_dir = Path(__file__).parent / 'backend'
+    upload_dir = backend_dir / "uploads"
     upload_dir.mkdir(exist_ok=True)
     print("✓ Uploads directory ready")
 
@@ -69,7 +70,8 @@ def main():
     
     # Start Flask app
     try:
-        from app import app
+        sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+        from app_workflow import app
         app.run(debug=True, host='0.0.0.0', port=5000)
     except KeyboardInterrupt:
         print("\n👋 Server stopped by user")
@@ -78,4 +80,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -7,6 +7,9 @@ import numpy as np
 import re
 from datetime import datetime
 
+# Debug configuration - set to False to disable debug prints
+DEBUG_PRINTS = False
+
 def read_data(data_path, table_path):
     def read_file_by_extension(file_path):
         """Read file based on its extension"""
@@ -340,12 +343,15 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
         try:
             company_df = pd.read_excel(company_data_path, engine='openpyxl')
             company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
-            print(f"Loaded project info from: {company_data_path}")
+            if DEBUG_PRINTS:
+                print(f"Loaded project info from: {company_data_path}")
         except Exception as e:
-            print(f"Warning: Could not load project info file: {e}")
+            if DEBUG_PRINTS:
+                print(f"Warning: Could not load project info file: {e}")
             company_df = None
     else:
-        print("Project info file not found, proceeding without it")
+        if DEBUG_PRINTS:
+            print("Project info file not found, proceeding without it")
 
     # Read input file
     ext = str(filepath).split('.')[-1].lower()

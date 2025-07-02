@@ -3,13 +3,14 @@ import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, But
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiBarChart2, FiTrendingUp } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
-// Import new components
+// Import components
 import ProjectFilters from './components/ProjectFilters';
 import DataStats from './components/DataStats';
+import FeatureImportanceAnalysis from './components/FeatureImportanceAnalysis';
 
 function App() {
   const [fileData, setFileData] = useState(null);
@@ -23,6 +24,7 @@ function App() {
   const [showPreview, setShowPreview] = useState(true);
   const [fileInfo, setFileInfo] = useState(null);
   const [storageStats, setStorageStats] = useState(null);
+  const [showAnalysis, setShowAnalysis] = useState(false);
   
   // Project filtering state
   const [selectedProject, setSelectedProject] = useState(null);
@@ -229,6 +231,21 @@ function App() {
 
       if (response.data.predictions) {
         setPredictions(response.data.predictions);
+        
+        // Update the full dataset with the complete prediction results
+        if (response.data.complete_dataset) {
+          setFullDataset(response.data.complete_dataset);
+          // Reset project filter to show all data
+          setSelectedProject(null);
+          setFilteredData(null);
+          // Extract available projects from the new data
+          const projects = extractProjects(response.data.complete_dataset);
+          setAvailableProjects(projects);
+          
+          // Hide data preview, only show prediction results
+          setShowPreview(false);
+        }
+        
         console.log(`Generated ${response.data.predictions.length} predictions`);
       } else {
         setError('No predictions returned from server');
@@ -278,9 +295,35 @@ function App() {
     if (!data || data.length === 0) return null;
     
     let columns = Object.keys(data[0]);
-    if (columns.includes('has_booked_prediction')) {
-      columns = columns.filter(c => c !== 'has_booked_prediction').concat(['has_booked_prediction']);
-    }
+    // Move prediction columns to the end
+    const predictionCols = ['has_booked_prediction', 'prediction_confidence'];
+    const otherCols = columns.filter(c => !predictionCols.includes(c));
+    const existingPredCols = predictionCols.filter(c => columns.includes(c));
+    columns = [...otherCols, ...existingPredCols];
+    
+    // Helper function to format cell values
+    const formatCellValue = (value, column) => {
+      if (value === null || value === undefined || value === '') return '';
+      
+      if (column === 'has_booked_prediction') {
+        if (typeof value === 'number') {
+          const prediction = value >= 0.5 ? 'Potential customer' : 'Not potential customer';
+          return prediction;
+        }
+      }
+      
+      if (column === 'prediction_confidence') {
+        if (typeof value === 'number') {
+          return (value * 100).toFixed(1) + '%';
+        }
+      }
+      
+      if (typeof value === 'boolean') {
+        return value ? 'Yes' : 'No';
+      }
+      
+      return value.toString();
+    };
     
     return (
       <Card className="mb-4">
@@ -298,7 +341,15 @@ function App() {
               <thead className="table-primary">
                 <tr>
                   {columns.map((column) => (
-                    <th key={column}>{column}</th>
+                    <th key={column} style={{
+                      backgroundColor: predictionCols.includes(column) ? '#d4edda' : '',
+                      fontWeight: predictionCols.includes(column) ? 'bold' : 'normal',
+                      fontSize: predictionCols.includes(column) ? '1.05em' : 'inherit',
+                      color: predictionCols.includes(column) ? '#1e7e34' : ''
+                    }}>
+                      {column === 'has_booked_prediction' ? 'Prediction' : 
+                       column === 'prediction_confidence' ? 'Confidence' : column}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -306,10 +357,16 @@ function App() {
                 {data.map((row, index) => (
                   <tr key={index}>
                     {columns.map((column) => (
-                      <td key={column}>
-                        {typeof row[column] === 'boolean' 
-                          ? (row[column] ? 'Yes' : 'No')
-                          : row[column]?.toString() || ''}
+                      <td key={column} style={{
+                        backgroundColor: predictionCols.includes(column) ? '#f8f9fa' : '',
+                        fontWeight: predictionCols.includes(column) ? 'bold' : 'normal',
+                        fontSize: predictionCols.includes(column) ? '1.05em' : 'inherit',
+                        color: (column === 'has_booked_prediction' || column === 'prediction_confidence') && 
+                               row['has_booked_prediction'] >= 0.5 ? '#28a745' : 
+                               (column === 'has_booked_prediction' || column === 'prediction_confidence') && 
+                               row['has_booked_prediction'] < 0.5 ? '#dc3545' : ''
+                      }}>
+                        {formatCellValue(row[column], column)}
                       </td>
                     ))}
                   </tr>
@@ -455,11 +512,16 @@ function App() {
     const predCol = data.map(row => row.has_booked_prediction);
     const missingCount = predCol.filter(v => v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))).length;
     // const missingPct = total ? ((100 * missingCount) / total).toFixed(2) : '0.00';
-    // Count each class
+    // Count each class - predictions are probabilities, so >=0.5 means likely to book
     const classCounts = { '0': 0, '1': 0 };
     predCol.forEach(v => {
-      if (v === 0 || v === '0') classCounts['0']++;
-      else if (v === 1 || v === '1') classCounts['1']++;
+      if (v !== null && v !== undefined && v !== '' && !isNaN(v)) {
+        if (parseFloat(v) >= 0.5) {
+          classCounts['1']++;
+        } else {
+          classCounts['0']++;
+        }
+      }
     });
     // Percent for each class
     const classPercents = {
@@ -487,10 +549,10 @@ function App() {
             <div style={{ marginTop: 12, fontWeight: 600 }}>Prediction Results:</div>
             <div style={{ marginLeft: 12, marginTop: 4 }}>
               <div style={{ color: '#388e3c', marginBottom: 2 }}>
-                Likely to book: <span style={{ fontWeight: 700 }}>{classCounts['1']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['1']})</span>
+                Potential customers: <span style={{ fontWeight: 700 }}>{classCounts['1']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['1']})</span>
               </div>
               <div style={{ color: '#d32f2f' }}>
-                Unlikely to book: <span style={{ fontWeight: 700 }}>{classCounts['0']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['0']})</span>
+                Not potential customers: <span style={{ fontWeight: 700 }}>{classCounts['0']}</span> <span style={{ color: '#888', fontWeight: 400 }}>({classPercents['0']})</span>
               </div>
             </div>
           </div>
@@ -523,214 +585,222 @@ function App() {
             </Alert>
           )}
 
-          {!fileData && (
-            <Card>
-              <Card.Body>
-                <div
-                  {...getRootProps()}
-                  className={`upload-area ${isDragActive ? 'dragover' : ''}`}
-                >
-                  <input {...getInputProps()} />
-                  <FiUpload size={48} className="text-primary mb-3" />
-                  <h4>Drop your file here, or click to select</h4>
-                  <p className="text-muted" style={{ color: 'var(--bs-body-color)' }}>
-                    Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
-                  </p>
-                  <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
-                    File must contain a "projectid" column
-                  </p>
-                </div>
-              </Card.Body>
-            </Card>
+          {/* Show the analysis page when requested */}
+          {showAnalysis && fileInfo && (
+            <FeatureImportanceAnalysis
+              fileInfo={fileInfo}
+              onBack={() => setShowAnalysis(false)}
+              selectedProject={selectedProject}
+              onSelectProject={handleProjectFilter}
+              availableProjects={availableProjects}
+            />
           )}
 
-          {loading && (
-            <div className="loading-spinner">
-              <div className="text-center">
-                <Spinner animation="border" role="status" className="mb-3">
-                  <span className="visually-hidden">Loading...</span>
-                </Spinner>
-                <p>Processing your file...</p>
-              </div>
-            </div>
-          )}
-
-          {fileData && !loading && showPreview && (
+          {/* Regular content when not showing analysis */}
+          {!showAnalysis && (
             <>
-              <Card className="mb-4">
-                <Card.Header>
-                  <h5 className="mb-0">File Information</h5>
-                </Card.Header>
-                <Card.Body>
-                  <Row>
-                    <Col md={6}>
-                      <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
-                    </Col>
-                    <Col md={6}>
-                      <Button
-                        variant="primary"
-                        onClick={generatePredictions}
-                        disabled={loading || !fileData}
-                        className="me-2"
-                      >
-                        <FiDatabase className="me-2" />
-                        Generate Predictions
-                      </Button>
-                      <Button variant="outline-secondary" onClick={cleanup}>
-                        Upload New File
-                      </Button>
-                    </Col>
-                  </Row>
-                </Card.Body>
-              </Card>
-              
-              {/* Project Filters */}
-              <ProjectFilters
-                projects={availableProjects}
-                selectedProject={selectedProject}
-                onSelect={handleProjectFilter}
-                onReset={handleFilterReset}
-                disabled={loading}
-                className="mb-4"
-              />
-              
-              {/* Data Statistics */}
-              <DataStats
-                data={currentData}
-                title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
-                className="mb-4"
-              />
-              
-              {renderPreviewControls()}
-              {/* Preview Table */}
-              {(!previewRows || previewRows.length === 0) ? (
-                <Alert variant="warning">No preview data available for this file.</Alert>
-              ) : (
-                renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
+              {!fileData && (
+                <Card>
+                  <Card.Body>
+                    <div
+                      {...getRootProps()}
+                      className={`upload-area ${isDragActive ? 'dragover' : ''}`}
+                    >
+                      <input {...getInputProps()} />
+                      <FiUpload size={48} className="text-primary mb-3" />
+                      <h4>Drop your file here, or click to select</h4>
+                      <p className="text-muted" style={{ color: 'var(--bs.body-color)' }}>
+                        Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
+                      </p>
+                      <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
+                        File must contain a "projectid" column
+                      </p>
+                    </div>
+                  </Card.Body>
+                </Card>
               )}
-            </>
-          )}
 
-          {predictions && !loading && (
-            <>
-              <Card className="mb-4">
-                <Card.Header>
-                  <h5 className="mb-0">Prediction Results</h5>
-                </Card.Header>
-                <Card.Body>
-                  <Row>
-                    <Col md={6}>
-                      <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
-                      <p><strong>Prediction Distribution:</strong> {JSON.stringify(predictions.stats?.prediction_distribution ?? {})}</p>
-                    </Col>
-                  </Row>
-                </Card.Body>
-              </Card>
-              {/* --- New Prediction Statistics Card --- */}
-              {renderPredictionStats()}
-              {/* Project Filters for Prediction Results */}
-              <ProjectFilters
-                projects={availableProjects}
-                selectedProject={selectedProject}
-                onSelect={handleProjectFilter}
-                onReset={handleFilterReset}
-                disabled={loading}
-                className="mb-4"
-              />
-              
-              {/* Prediction Data Statistics */}
-              <DataStats
-                data={currentData}
-                title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
-                className="mb-4"
-              />
-              
-              {renderPreviewControls()}
-              {/* Final Prediction Preview */}
-              <h5>Final Prediction Preview</h5>
-              {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
-              
-              <Card>
-                <Card.Header>
-                  <h5 className="mb-0">
-                    <FiDownload className="me-2" />
-                    Export Results
-                  </h5>
-                </Card.Header>
-                <Card.Body>
-                  <div className="d-flex flex-wrap gap-2">
+              {loading && (
+                <div className="loading-spinner">
+                  <div className="text-center">
+                    <Spinner animation="border" role="status" className="mb-3">
+                      <span className="visually-hidden">Loading...</span>
+                    </Spinner>
+                    <p>Processing your file...</p>
+                  </div>
+                </div>
+              )}
+
+              {fileData && !loading && showPreview && (
+                <>
+                  <Card className="mb-4">
+                    <Card.Header>
+                      <h5 className="mb-0">File Information</h5>
+                    </Card.Header>
+                    <Card.Body>
+                      <Row>
+                        <Col md={6}>
+                          <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
+                        </Col>
+                        <Col md={6}>
+                          <Button
+                            variant="primary"
+                            onClick={generatePredictions}
+                            disabled={loading || !fileData}
+                            className="me-2"
+                          >
+                            <FiDatabase className="me-2" />
+                            Generate Predictions
+                          </Button>
+                          <Button variant="outline-secondary" onClick={cleanup}>
+                            Upload New File
+                          </Button>
+                        </Col>
+                      </Row>
+                    </Card.Body>
+                  </Card>
+                  
+                  {/* Project Filters */}
+                  <ProjectFilters
+                    projects={availableProjects}
+                    selectedProject={selectedProject}
+                    onSelect={handleProjectFilter}
+                    onReset={handleFilterReset}
+                    disabled={loading}
+                    className="mb-4"
+                  />
+                  
+                  {/* Data Statistics */}
+                  <DataStats
+                    data={currentData}
+                    title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
+                    className="mb-4"
+                  />
+                  
+                  {renderPreviewControls()}
+                  {/* Preview Table - Only shown when showPreview is true */}
+                  {showPreview && (
+                    (!previewRows || previewRows.length === 0) ? (
+                      <Alert variant="warning">No preview data available for this file.</Alert>
+                    ) : (
+                      renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
+                    )
+                  )}
+                </>
+              )}
+
+              {predictions && !loading && (
+                <>
+                  <Card className="mb-4">
+                    <Card.Header>
+                      <h5 className="mb-0">Prediction Results Summary</h5>
+                    </Card.Header>
+                    <Card.Body>
+                      <Row>
+                        <Col md={6}>
+                          <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
+                          <p><strong>Prediction Distribution:</strong> 
+                            {predictions.stats?.prediction_distribution ? 
+                              (predictions.stats.prediction_distribution['1'] > 0 ? 
+                                `${predictions.stats.prediction_distribution['1']} potential customers, ` : '') +
+                              (predictions.stats.prediction_distribution['0'] > 0 ? 
+                                `${predictions.stats.prediction_distribution['0']} not potential customers` : '')
+                              : '-'}
+                          </p>
+                        </Col>
+                        <Col md={6} className="d-flex align-items-center justify-content-end">
+                          <Button 
+                            variant="success" 
+                            onClick={() => setShowAnalysis(true)}
+                            className="d-flex align-items-center"
+                          >
+                            <FiBarChart2 className="me-2" />
+                            View Feature Importance Analysis
+                          </Button>
+                        </Col>
+                      </Row>
+                    </Card.Body>
+                  </Card>
+                  {/* --- New Prediction Statistics Card --- */}
+                  {renderPredictionStats()}
+                  {/* Project Filters for Prediction Results */}
+                  <ProjectFilters
+                    projects={availableProjects}
+                    selectedProject={selectedProject}
+                    onSelect={handleProjectFilter}
+                    onReset={handleFilterReset}
+                    disabled={loading}
+                    className="mb-4"
+                  />
+                  
+                  {/* Prediction Data Statistics */}
+                  <DataStats
+                    data={currentData}
+                    title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
+                    className="mb-4"
+                  />
+                  
+                  {renderPreviewControls()}
+                  {/* Final Prediction Preview */}
+                  <h4 className="mt-3 mb-3" style={{ color: '#0d6efd' }}>Final Prediction Preview: Prediction Results</h4>
+                  {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
+                  
+                  <Card>
+                    <Card.Header>
+                      <h5 className="mb-0">
+                        <FiDownload className="me-2" />
+                        Export Results
+                      </h5>
+                    </Card.Header>
+                    <Card.Body>
+                      <div className="d-flex flex-wrap gap-2">
+                        <Button
+                          variant="outline-primary"
+                          onClick={() => exportResults('csv')}
+                          className="btn-export"
+                        >
+                          Export as CSV
+                        </Button>
+                        <Button
+                          variant="outline-success"
+                          onClick={() => exportResults('xlsx')}
+                          className="btn-export"
+                        >
+                          Export as Excel
+                        </Button>
+                        <Button
+                          variant="outline-info"
+                          onClick={() => exportResults('json')}
+                          className="btn-export"
+                        >
+                          Export as JSON
+                        </Button>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                  {/* Upload New File button at the bottom */}
+                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
                     <Button
-                      variant="outline-primary"
-                      onClick={() => exportResults('csv')}
-                      className="btn-export"
+                      variant="secondary"
+                      size="lg"
+                      onClick={cleanup}
+                      style={{ minWidth: 220, fontWeight: 600 }}
                     >
-                      Export as CSV
-                    </Button>
-                    <Button
-                      variant="outline-success"
-                      onClick={() => exportResults('xlsx')}
-                      className="btn-export"
-                    >
-                      Export as Excel
-                    </Button>
-                    <Button
-                      variant="outline-info"
-                      onClick={() => exportResults('json')}
-                      className="btn-export"
-                    >
-                      Export as JSON
+                      Upload New File
                     </Button>
                   </div>
-                </Card.Body>
-              </Card>
-              {/* Upload New File button at the bottom */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  onClick={cleanup}
-                  style={{ minWidth: 220, fontWeight: 600 }}
-                >
-                  Upload New File
-                </Button>
-              </div>
-            </>
-          )}
+                </>
+              )}
 
-          {fileInfo && (
-            <>
-              {renderFileRetentionInfo()}
-              {renderStorageStats()}
-            </>
-          )}
+              {fileInfo && (
+                <>
+                  {renderFileRetentionInfo()}
+                  {renderStorageStats()}
+                </>
+              )}
 
-          {/* Predictions display section */}
-          {predictions && (
-            <div className="predictions-section">
-              <h3>Predictions ({predictions.length})</h3>
-              <div className="predictions-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Project ID</th>
-                      <th>Row Index</th>
-                      <th>Prediction</th>
-                      <th>Confidence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {predictions.slice(0, 50).map((pred, idx) => (
-                      <tr key={idx}>
-                        <td>{pred.projectid}</td>
-                        <td>{pred.row_index}</td>
-                        <td>{pred.prediction}</td>
-                        <td>{pred.confidence}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+              {/* End of content */}
+            </>
           )}
         </Col>
       </Row>

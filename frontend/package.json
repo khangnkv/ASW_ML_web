@@ -16,11 +16,13 @@
     "xlsx": "^0.18.5",
     "bootstrap": "^5.3.0",
     "react-bootstrap": "^2.8.0",
-    "react-icons": "^4.10.1"
+    "react-icons": "^4.10.1",
+    "chart.js": "^4.3.0",
+    "react-chartjs-2": "^5.2.0"
   },
   "scripts": {
     "start": "npx react-scripts start",
-    "build": "sh node_modules/.bin/react-scripts build",
+    "build": "npx react-scripts build",
     "test": "npx react-scripts test",
     "eject": "npx react-scripts eject"
   },

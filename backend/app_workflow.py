@@ -13,6 +13,9 @@ from backend.model.predictor import MLPredictor
 from preprocessing import preprocess_data, get_raw_preview
 from backend.data_retention import retention_manager
 
+# Debug configuration - set to False to disable debug prints
+DEBUG_PRINTS = False
+
 app = Flask(__name__)
 # Enhanced CORS configuration
 CORS(app, resources={
@@ -184,7 +187,6 @@ def upload_uuid():
             "file_info": file_info
         }
 
-        print("RESPONSE DEBUG:", response_data)
         return jsonify(response_data)
         
     except Exception as e:
@@ -194,7 +196,8 @@ def upload_uuid():
 # Main workflow endpoint
 @app.route('/api/predict_workflow', methods=['POST'])
 def predict_workflow():
-    print("[PREDICT] /api/predict_workflow endpoint called")
+    if DEBUG_PRINTS:
+        print("[PREDICT] /api/predict_workflow endpoint called")
     try:
         data = request.get_json()
         if not data or 'filename' not in data:
@@ -206,7 +209,8 @@ def predict_workflow():
         if not upload_path.exists():
             return jsonify({'error': f'File {filename} not found'}), 404
         
-        print(f"[PREDICT] Processing file: {upload_path}")
+        if DEBUG_PRINTS:
+            print(f"[PREDICT] Processing file: {upload_path}")
         
         # 1. Read raw data
         if filename.endswith('.csv'):
@@ -214,16 +218,19 @@ def predict_workflow():
         else:
             raw_df = pd.read_excel(upload_path)
         
-        print(f"[PREDICT] Raw data shape: {raw_df.shape}")
+        if DEBUG_PRINTS:
+            print(f"[PREDICT] Raw data shape: {raw_df.shape}")
         
         # 2. Preprocessing
         try:
             processed_df = preprocess_data(str(upload_path))
             if not isinstance(processed_df, pd.DataFrame):
                 processed_df = pd.DataFrame(processed_df)
-            print(f"[PREDICT] Processed data shape: {processed_df.shape}")
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Processed data shape: {processed_df.shape}")
         except Exception as e:
-            print(f"[PREDICT] Preprocessing error: {e}")
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Preprocessing error: {e}")
             return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
         
         # 3. Generate predictions using the main predict method
@@ -231,25 +238,42 @@ def predict_workflow():
             # Use the main predict method which handles all projects at once
             result_df = predictor.predict(processed_df, log_progress=True)
             
+            # Add confidence scores
+            result_df = predictor.add_prediction_confidence(result_df)
+            
             # Extract predictions from the result
             predictions_list = []
+            prediction_counts = {'likely': 0, 'unlikely': 0}
+            
             if 'has_booked_prediction' in result_df.columns:
                 for idx, row in result_df.iterrows():
                     pred_value = row['has_booked_prediction']
+                    confidence = row.get('prediction_confidence', 0.95)
                     if not pd.isna(pred_value):
                         predictions_list.append({
                             'projectid': int(row['projectid']),
                             'row_index': idx,
                             'prediction': float(pred_value),
-                            'confidence': 0.95
+                            'confidence': float(confidence)
                         })
+                        # Count predictions
+                        if pred_value >= 0.5:
+                            prediction_counts['likely'] += 1
+                        else:
+                            prediction_counts['unlikely'] += 1
             
-            print(f"[PREDICT] Generated {len(predictions_list)} predictions")
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Generated {len(predictions_list)} predictions")
+            
+            # Return the complete dataset with predictions for the frontend table
+            complete_dataset = sanitize_records(result_df.to_dict(orient='records'))
             
             response_data = {
                 'predictions': predictions_list,
+                'complete_dataset': complete_dataset,
                 'raw_preview': sanitize_records(raw_df.head(5).to_dict(orient='records')),
                 'processed_preview': sanitize_records(processed_df.head(5).to_dict(orient='records')),
+                'prediction_counts': prediction_counts,
                 'summary': {
                     'total_rows': len(processed_df),
                     'projects_processed': len(processed_df['projectid'].unique()) if 'projectid' in processed_df.columns else 0,
@@ -260,14 +284,119 @@ def predict_workflow():
             return jsonify(response_data)
             
         except Exception as e:
-            print(f"[PREDICT] Prediction error: {e}")
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Prediction error: {e}")
             return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
             
     except Exception as e:
-        print(f"[PREDICT][ERROR] {e}")
-        import traceback
-        traceback.print_exc()
+        if DEBUG_PRINTS:
+            print(f"[PREDICT][ERROR] {e}")
+            import traceback
+            traceback.print_exc()
         return jsonify({'error': f'Error processing request: {str(e)}'}), 500
+
+# Feature importance analysis endpoint
+@app.route('/api/feature_importance/<filename>', methods=['GET'])
+def get_feature_importance(filename):
+    """Get feature importance analysis for all projects in a file"""
+    try:
+        project_id = request.args.get('project_id')
+        
+        # Load the file
+        file_path = UPLOADS_DIR / filename
+        if not file_path.exists():
+            return jsonify({'error': f'File {filename} not found'}), 404
+            
+        # Read the data
+        df = pd.read_csv(file_path)
+        
+        # Process the data if needed
+        try:
+            processed_df = preprocess_data(str(file_path))
+            if not isinstance(processed_df, pd.DataFrame):
+                processed_df = pd.DataFrame(processed_df)
+        except Exception as e:
+            return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
+        
+        # If project_id is provided, analyze only that project
+        if project_id:
+            try:
+                pid = int(project_id)
+                result = predictor.calculate_feature_importance(processed_df, pid)
+                return jsonify({
+                    'project_id': pid,
+                    'analysis': result
+                })
+            except ValueError:
+                return jsonify({'error': f'Invalid project ID: {project_id}'}), 400
+        else:
+            # Analyze all projects
+            results = predictor.analyze_all_projects(processed_df)
+            return jsonify({
+                'analysis': results,
+                'projects_analyzed': len(results)
+            })
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': f'Error analyzing feature importance: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+# SHAP visualization data endpoint
+@app.route('/api/shap_visualization/<filename>', methods=['GET'])
+def get_shap_visualization(filename):
+    """Get SHAP visualization data for a specific project"""
+    try:
+        project_id = request.args.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'Project ID is required'}), 400
+            
+        try:
+            pid = int(project_id)
+        except ValueError:
+            return jsonify({'error': f'Invalid project ID: {project_id}'}), 400
+            
+        # Load the file
+        file_path = UPLOADS_DIR / filename
+        if not file_path.exists():
+            return jsonify({'error': f'File {filename} not found'}), 404
+            
+        # Read and process the data
+        df = pd.read_csv(file_path)
+        processed_df = preprocess_data(str(file_path))
+        if not isinstance(processed_df, pd.DataFrame):
+            processed_df = pd.DataFrame(processed_df)
+            
+        # Filter data for the requested project
+        project_data = processed_df[processed_df['projectid'] == pid]
+        
+        if len(project_data) == 0:
+            return jsonify({'error': f'No data found for project ID {pid}'}), 404
+            
+        # Calculate feature importance
+        result = predictor.calculate_feature_importance(processed_df, pid)
+        
+        # Create visualization data specifically for the frontend
+        if result.get('status') == 'success':
+            visualization_data = {
+                'project_id': pid,
+                'feature_names': result['shap_data']['feature_names'][:10],  # Top 10 features
+                'importance_values': result['shap_data']['importance_values'][:10],
+                'importance_pct': result['shap_data']['importance_pct'][:10],
+                'model_type': result['shap_data']['model_type']
+            }
+            return jsonify(visualization_data)
+        else:
+            return jsonify({'error': result.get('error', 'Unknown error')}), 500
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': f'Error generating visualization data: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

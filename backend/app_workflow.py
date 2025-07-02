@@ -1,6 +1,6 @@
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -17,7 +17,12 @@ app = Flask(__name__)
 # Enhanced CORS configuration
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+        "origins": [
+            "http://localhost:3000", 
+            "http://127.0.0.1:3000",
+            "http://frontend:3000",
+            "http://ml-frontend:3000"
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
@@ -28,6 +33,7 @@ BACKEND_DIR = Path(__file__).parent
 UPLOADS_DIR = BACKEND_DIR / 'uploads'
 PREPROCESSED_DIR = BACKEND_DIR / 'preprocessed_unencoded'
 PREPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 predictor = MLPredictor()
 
@@ -116,149 +122,152 @@ def export_results(format, filename):
 # Helper: Save uploaded file with UUID
 @app.route('/api/upload_uuid', methods=['POST'])
 def upload_uuid():
-    import traceback
     print("[UPLOAD] /api/upload_uuid endpoint called")
     try:
         if 'file' not in request.files:
-            print("[UPLOAD][ERROR] No file part in request.files")
-            return jsonify({'error': 'No file provided'}), 400
+            return jsonify({'error': 'No file part in the request'}), 400
         file = request.files['file']
         print(f"[UPLOAD] Received file: {getattr(file, 'filename', None)}")
         if not file or not file.filename:
-            print("[UPLOAD][ERROR] No file selected")
-            return jsonify({'error': 'No file selected'}), 400
+            return jsonify({'error': 'No selected file'}), 400
+
         ext = file.filename.rsplit('.', 1)[-1].lower()
-        if ext not in {'csv', 'xlsx', 'xls'}:
-            print(f"[UPLOAD][ERROR] Invalid file type: {ext}")
-            return jsonify({'error': 'Invalid file type'}), 400
+        if ext not in ['csv', 'xlsx', 'xls']:
+            return jsonify({'error': 'Unsupported file type'}), 400
+
+        # Read file into DataFrame
+        if ext == 'csv':
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
+
+        # Ensure 'projectid' column exists
+        if 'projectid' not in df.columns:
+            # Try to auto-rename common alternatives
+            if 'Project ID' in df.columns:
+                df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+            else:
+                return jsonify({'error': "File must contain a 'projectid' column"}), 400
+
+        # Save file with UUID
         uuid_name = f"{uuid.uuid4()}.csv"
         save_path = UPLOADS_DIR / uuid_name
-        print(f"[UPLOAD] Saving file as: {save_path}")
-        try:
-            if ext == 'csv':
-                df = pd.read_csv(file.stream)
-            else:
-                df = pd.read_excel(file.stream, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
-            print(f"[UPLOAD] DataFrame loaded, shape: {df.shape}")
-            df.to_csv(save_path, index=False)
-            print(f"[UPLOAD] File saved to: {save_path}")
-            file_info = retention_manager.store_file(uuid_name, file.filename)
-            preview = sanitize_records(get_raw_preview(df, n=5).to_dict(orient='records'))
-            full_dataset = sanitize_records(df.to_dict(orient='records'))
-            print(f"[UPLOAD] Preview rows: {len(preview)}, Full dataset rows: {len(full_dataset)}")
-            return jsonify({
-                'filename': uuid_name, 
-                'preview': preview,
-                'full_dataset': full_dataset,
-                'file_info': file_info
-            })
-        except Exception as e:
-            tb = traceback.format_exc()
-            print(f"[UPLOAD][ERROR] Exception during file processing: {e}\n{tb}")
-            return jsonify({'error': f'Error reading file: {e}', 'traceback': tb}), 400
+        df.to_csv(save_path, index=False)
+        print(f"[UPLOAD] File saved to: {save_path.resolve()}")
+
+        # Sanitize for JSON serialization
+        def safe(val):
+            if pd.isna(val):
+                return ""
+            if isinstance(val, (pd.Timestamp, datetime)):
+                return str(val)
+            return val
+
+        preview = [{k: safe(v) for k, v in row.items()} for row in df.head(5).to_dict(orient='records')]
+        full_dataset = [{k: safe(v) for k, v in row.items()} for row in df.to_dict(orient='records')]
+
+        # File info for retention
+        now = datetime.utcnow()
+        retention_days = 90
+        file_info = {
+            "filename": uuid_name,
+            "originalName": file.filename,
+            "upload_timestamp": now.isoformat(),
+            "deletion_date": (now + timedelta(days=retention_days)).isoformat(),
+            "status": "active"
+        }
+
+        response_data = {
+            "filename": uuid_name,
+            "preview": preview,
+            "full_dataset": full_dataset,
+            "file_info": file_info
+        }
+
+        print("RESPONSE DEBUG:", response_data)
+        return jsonify(response_data)
+        
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[UPLOAD][ERROR] Unexpected exception: {e}\n{tb}")
-        return jsonify({'error': f'Unexpected error: {e}', 'traceback': tb}), 500
+        print(f"[UPLOAD][ERROR] {e}")
+        return jsonify({'error': f'Error processing file: {str(e)}'}), 500
 
 # Main workflow endpoint
 @app.route('/api/predict_workflow', methods=['POST'])
 def predict_workflow():
-    data = request.json
-    filename = data.get('filename')
-    if not filename:
-        return jsonify({'error': 'Filename not provided'}), 400
-    upload_path = UPLOADS_DIR / filename
-    if not upload_path.exists():
-        return jsonify({'error': 'File not found'}), 404
+    print("[PREDICT] /api/predict_workflow endpoint called")
     try:
-        # 1. Raw preview
-        raw_df = pd.read_csv(upload_path) if filename.endswith('.csv') else pd.read_excel(upload_path)
-        raw_preview = sanitize_records(get_raw_preview(raw_df, n=5).to_dict(orient='records'))
-        # 2. Preprocessing (25%)
-        processed_df = preprocess_data(str(upload_path))
-        # Ensure processed_df is a DataFrame
-        if not isinstance(processed_df, pd.DataFrame):
-            processed_df = pd.DataFrame(processed_df)
-        processed_preview = sanitize_records(get_raw_preview(processed_df, n=5).to_dict(orient='records'))
-        # 3. Prediction (50%)
-        # --- Feature validation and logging ---
-        projectids = processed_df['projectid'].unique() if 'projectid' in processed_df.columns else []
-        missing_features_report = {}
-        for pid in projectids:
-            try:
-                pid_int = int(pid)
-            except Exception:
-                continue
-            if pid_int in predictor.models:
-                _, features = predictor.models[pid_int]
-                missing = [f for f in features if f not in processed_df.columns]
-                if missing:
-                    missing_features_report[pid_int] = missing
-        if missing_features_report:
-            return jsonify({'error': f'Missing required features for prediction', 'details': missing_features_report, 'columns': list(processed_df.columns)}), 400
-        print('Columns before prediction:', list(processed_df.columns))
-        pred_df = predictor.predict(processed_df, log_progress=False)
-        if not isinstance(pred_df, pd.DataFrame):
-            pred_df = pd.DataFrame(pred_df)
-        final_preview = sanitize_records(get_raw_preview(pred_df, n=5).to_dict(orient='records'))
-        # 4. Stats
-        pred_col = pred_df['has_booked_prediction']
-        total = len(pred_col)
-        missing_count = int(pred_col.isna().sum())
-        missing_pct = round(100 * missing_count / total, 2) if total else 0.0
-        pred_dist = pred_col.value_counts(dropna=False).to_dict()
-        pred_dist_pct = {str(k): f"{round(100*v/total,2)}%" for k, v in pred_col.value_counts(dropna=False).items()}
-        stats = {
-            'rows_processed': total,
-            'missing_predictions': {'count': missing_count, 'percent': f"{missing_pct}%"},
-            'prediction_distribution': pred_dist,
-            'prediction_distribution_percent': pred_dist_pct
-        }
-        # 5. Export formats
-        export_formats = ['csv', 'xlsx', 'json']
-        # 6. Save final results for export
-        results_filename = f"results_{filename.rsplit('.', 1)[0]}.csv"
-        results_path = UPLOADS_DIR / results_filename
-        pred_df.to_csv(results_path, index=False)
-        # 7. Response
+        data = request.get_json()
+        if not data or 'filename' not in data:
+            return jsonify({'error': 'No filename provided'}), 400
+        
+        filename = data['filename']
+        upload_path = UPLOADS_DIR / filename
+        
+        if not upload_path.exists():
+            return jsonify({'error': f'File {filename} not found'}), 404
+        
+        print(f"[PREDICT] Processing file: {upload_path}")
+        
+        # 1. Read raw data
+        if filename.endswith('.csv'):
+            raw_df = pd.read_csv(upload_path)
+        else:
+            raw_df = pd.read_excel(upload_path)
+        
+        print(f"[PREDICT] Raw data shape: {raw_df.shape}")
+        
+        # 2. Preprocessing
         try:
-            # Instead of sending pred_df (which may include raw columns), send only the preprocessed features + prediction
-            # Get the features used for prediction for all projects
-            all_features = set()
-            for pid in predictor.models:
-                model, features = predictor.models[pid]
-                all_features.update(features)
-            # Ensure all features are present in pred_df
-            feature_cols = [f for f in all_features if f in pred_df.columns]
-            # Always include projectid and has_booked_prediction
-            display_cols = ['projectid'] + feature_cols + ['has_booked_prediction']
-            display_cols = [c for c in display_cols if c in pred_df.columns]
-            print(f"[DEBUG] display_cols: {display_cols}")
-            preprocessed_plus_pred = pred_df[display_cols].copy()
-            print(f"[DEBUG] preprocessed_plus_pred shape: {preprocessed_plus_pred.shape}")
-            if preprocessed_plus_pred.empty:
-                return jsonify({'error': 'No preprocessed data available for display. Check feature extraction.'}), 500
-            return jsonify({
-                'preview': {
-                    'raw': raw_preview,
-                    'processed': processed_preview,
-                    'final': final_preview
-                },
-                'full_dataset': sanitize_records(preprocessed_plus_pred.to_dict(orient='records')),
-                'export_formats': export_formats,
-                'stats': stats,
-                'results_filename': results_filename
-            })
+            processed_df = preprocess_data(str(upload_path))
+            if not isinstance(processed_df, pd.DataFrame):
+                processed_df = pd.DataFrame(processed_df)
+            print(f"[PREDICT] Processed data shape: {processed_df.shape}")
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print(f"[ERROR] Exception in response block: {e}\n{tb}")
-            return jsonify({'error': f'Workflow error (response block): {e}', 'traceback': tb}), 500
+            print(f"[PREDICT] Preprocessing error: {e}")
+            return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
+        
+        # 3. Generate predictions using the main predict method
+        try:
+            # Use the main predict method which handles all projects at once
+            result_df = predictor.predict(processed_df, log_progress=True)
+            
+            # Extract predictions from the result
+            predictions_list = []
+            if 'has_booked_prediction' in result_df.columns:
+                for idx, row in result_df.iterrows():
+                    pred_value = row['has_booked_prediction']
+                    if not pd.isna(pred_value):
+                        predictions_list.append({
+                            'projectid': int(row['projectid']),
+                            'row_index': idx,
+                            'prediction': float(pred_value),
+                            'confidence': 0.95
+                        })
+            
+            print(f"[PREDICT] Generated {len(predictions_list)} predictions")
+            
+            response_data = {
+                'predictions': predictions_list,
+                'raw_preview': sanitize_records(raw_df.head(5).to_dict(orient='records')),
+                'processed_preview': sanitize_records(processed_df.head(5).to_dict(orient='records')),
+                'summary': {
+                    'total_rows': len(processed_df),
+                    'projects_processed': len(processed_df['projectid'].unique()) if 'projectid' in processed_df.columns else 0,
+                    'predictions_generated': len(predictions_list)
+                }
+            }
+            
+            return jsonify(response_data)
+            
+        except Exception as e:
+            print(f"[PREDICT] Prediction error: {e}")
+            return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+            
     except Exception as e:
+        print(f"[PREDICT][ERROR] {e}")
         import traceback
-        tb = traceback.format_exc()
-        return jsonify({'error': f'Workflow error: {e}', 'traceback': tb}), 500
+        traceback.print_exc()
+        return jsonify({'error': f'Error processing request: {str(e)}'}), 500
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

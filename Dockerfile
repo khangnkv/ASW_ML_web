@@ -15,22 +15,32 @@ RUN apt-get update && \
 
 # Copy requirements and install
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Copy backend and model files, but exclude uploads and preprocessed_unencoded
+# Copy all necessary files
 COPY backend ./backend
-COPY backend/model ./backend/model
-RUN mkdir -p ./backend/notebooks/project_info
-COPY backend/notebooks/project_info/ProjectID_Detail.xlsx ./backend/notebooks/project_info/ProjectID_Detail.xlsx
 COPY preprocessing.py ./preprocessing.py
 COPY run_backend_only.py ./run_backend_only.py
 
-# Ensure upload directories exist and are writable
-RUN mkdir -p ./backend/uploads ./backend/preprocessed_unencoded \
-    && chmod -R 777 ./backend/uploads ./backend/preprocessed_unencoded
+# Copy notebooks directory if it exists
+COPY notebooks ./notebooks/
+
+# Create necessary directories including project_info
+RUN mkdir -p ./backend/uploads ./backend/preprocessed_unencoded ./backend/notebooks/project_info && \
+    chmod -R 777 ./backend/uploads ./backend/preprocessed_unencoded ./backend/notebooks
+
+# Copy ProjectID_Detail.xlsx to the correct location for preprocessing
+RUN if [ -f ./notebooks/project_info/ProjectID_Detail.xlsx ]; then \
+        cp ./notebooks/project_info/ProjectID_Detail.xlsx ./backend/notebooks/project_info/; \
+    else \
+        echo "Warning: ProjectID_Detail.xlsx not found"; \
+    fi
+
+# Set working directory to backend
+WORKDIR /app/backend
 
 # Expose backend port
 EXPOSE 5000
 
 # Set default command to run backend
-CMD ["python", "backend/app_workflow.py"]
+CMD ["python", "app_workflow.py"]

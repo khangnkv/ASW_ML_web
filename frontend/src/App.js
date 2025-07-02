@@ -152,41 +152,44 @@ function App() {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('/api/upload_uuid', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      
-      // Cache the full dataset for filtering (all rows)
-      setFullDataset(response.data.full_dataset);
-      setFilteredData(response.data.full_dataset);
-      
-      // Extract available projects from the full dataset
-      const projects = extractProjects(response.data.full_dataset);
-      setAvailableProjects(projects);
-      
-      setFileData({
-        filename: response.data.filename,
-        preview: response.data.preview,  // Keep preview for display
-        originalName: file.name,
-      });
-      setFileInfo(response.data.file_info);
       setShowPreview(true);
-      
-      // Reset filter state
       setSelectedProject(null);
-      
+
+      // Make the upload request
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.post(
+        `${API_URL}/api/upload_uuid`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      console.log("UPLOAD RESPONSE:", response);
+
+      // Defensive: check if response contains expected fields
+      const { filename, preview, full_dataset, file_info } = response.data || {};
+      if (!preview || !full_dataset) {
+        setError('Upload failed: Invalid response from server.');
+        return;
+      }
+
+      // Extract projects from full_dataset
+      const projects = extractProjects(full_dataset);
+
+      setFileData(full_dataset);
+      setFullDataset(full_dataset);
+      setAvailableProjects(projects);
+      setFileInfo(file_info);
+
       console.log('Uploaded fileData:', {
-        filename: response.data.filename,
-        previewRows: response.data.preview.length,
-        fullDatasetRows: response.data.full_dataset.length,
+        filename,
+        previewRows: preview.length,
+        fullDatasetRows: full_dataset.length,
         originalName: file.name,
-        fileInfo: response.data.file_info,
+        fileInfo: file_info,
         availableProjects: projects,
       });
     } catch (error) {
-      setError(error.response?.data?.error || 'Error uploading file');
+      setError(error.response?.data?.error || error.message || 'Error uploading file');
     } finally {
       setLoading(false);
     }
@@ -203,30 +206,37 @@ function App() {
   });
 
   const generatePredictions = async () => {
-    if (!fileData) return;
+    if (!fileInfo?.filename) {
+      setError('No file uploaded for prediction');
+      return;
+    }
+
     setLoading(true);
     setError(null);
+    setPredictions(null);
+
     try {
-      const response = await axios.post('/api/predict_workflow', {
-        filename: fileData.filename,
-      });
+      console.log('Generating predictions for file:', fileInfo.filename);
       
-      // Cache the full prediction dataset for filtering (all rows)
-      const fullPredictionData = response.data.full_dataset;
-      setFullDataset(fullPredictionData);
-      setFilteredData(fullPredictionData);
-      
-      // Re-extract projects from prediction data (in case preprocessing changed project IDs)
-      const projects = extractProjects(fullPredictionData);
-      setAvailableProjects(projects);
-      
-      setPredictions(response.data);
-      setShowPreview(false); // Hide preview after prediction
-      
-      // Reset filter state for prediction results
-      setSelectedProject(null);
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.post(
+        `${API_URL}/api/predict_workflow`,
+        { filename: fileInfo.filename },
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+
+      console.log('Prediction response:', response.data);
+
+      if (response.data.predictions) {
+        setPredictions(response.data.predictions);
+        console.log(`Generated ${response.data.predictions.length} predictions`);
+      } else {
+        setError('No predictions returned from server');
+      }
+
     } catch (error) {
-      setError(error.response?.data?.error || 'Error generating predictions');
+      console.error('Prediction error:', error);
+      setError(error.response?.data?.error || error.message || 'Error generating predictions');
     } finally {
       setLoading(false);
     }
@@ -462,7 +472,7 @@ function App() {
           <h5 className="mb-0" style={{ color: 'var(--bs-body-color)' }}>Project {selectedProject ? selectedProject : 'All'} Prediction Statistics</h5>
         </Card.Header>
         <Card.Body>
-          <div style={{ fontSize: '1.1rem', color: 'var(--bs-body-color)' }}>
+          <div style={{ fontSize: '1.1rem', color: 'var(--bs.body-color)' }}>
             <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginBottom: 8 }}>
               <div><span style={{ color: '#1976d2', fontWeight: 700, fontSize: 22 }}>{total}</span><br />Total Rows</div>
               <div><span style={{ color: '#00bcd4', fontWeight: 700, fontSize: 22 }}>{totalCols}</span><br />Total Columns</div>
@@ -470,7 +480,7 @@ function App() {
               <div><span style={{ color: '#ffc107', fontWeight: 700, fontSize: 22 }}>{categoricalCols}</span><br />Categorical Columns</div>
             </div>
             <div style={{ margin: '12px 0' }}>
-              <span style={{ fontWeight: 600, background: 'var(--bs-secondary-bg, #f5f5f5)', borderRadius: 16, padding: '6px 16px', display: 'inline-block', color: 'var(--bs-body-color)' }}>
+              <span style={{ fontWeight: 600, background: 'var(--bs-secondary-bg, #f5f5f5)', borderRadius: 16, padding: '6px 16px', display: 'inline-block', color: 'var(--bs.body-color)' }}>
                 {missingCount.toLocaleString()} missing values detected
               </span>
             </div>
@@ -526,7 +536,7 @@ function App() {
                   <p className="text-muted" style={{ color: 'var(--bs-body-color)' }}>
                     Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
                   </p>
-                  <p className="text-muted small" style={{ color: 'var(--bs-body-color)' }}>
+                  <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
                     File must contain a "projectid" column
                   </p>
                 </div>
@@ -693,10 +703,39 @@ function App() {
               {renderStorageStats()}
             </>
           )}
+
+          {/* Predictions display section */}
+          {predictions && (
+            <div className="predictions-section">
+              <h3>Predictions ({predictions.length})</h3>
+              <div className="predictions-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Project ID</th>
+                      <th>Row Index</th>
+                      <th>Prediction</th>
+                      <th>Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {predictions.slice(0, 50).map((pred, idx) => (
+                      <tr key={idx}>
+                        <td>{pred.projectid}</td>
+                        <td>{pred.row_index}</td>
+                        <td>{pred.prediction}</td>
+                        <td>{pred.confidence}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </Col>
       </Row>
     </Container>
   );
 }
 
-export default App; 
+export default App;

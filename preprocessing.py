@@ -301,17 +301,51 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     Returns: processed DataFrame (unencoded)
     """
     # Set defaults
-    project_root = Path(__file__).resolve().parent.parent
-    backend_dir = project_root / 'backend'
+    # Handle both Docker and local environments
+    if os.getcwd().endswith('/backend') or os.getcwd().endswith('\\backend'):
+        # Running from backend directory (Docker environment)
+        backend_dir = Path(os.getcwd())
+        project_root = backend_dir.parent
+    else:
+        # Running from project root (local environment)
+        project_root = Path(__file__).resolve().parent
+        backend_dir = project_root / 'backend'
+    
     if company_data_path is None:
         company_data_path = backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx'
+        # Also try alternative locations if the file doesn't exist
+        if not company_data_path.exists():
+            alt_paths = [
+                project_root / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
+                backend_dir / 'project_info' / 'ProjectID_Detail.xlsx',
+                Path('/app/backend/notebooks/project_info/ProjectID_Detail.xlsx'),
+                Path('/app/notebooks/project_info/ProjectID_Detail.xlsx')
+            ]
+            for alt_path in alt_paths:
+                if alt_path.exists():
+                    company_data_path = alt_path
+                    print(f"Found ProjectID_Detail.xlsx at: {company_data_path}")
+                    break
+            else:
+                print(f"Warning: ProjectID_Detail.xlsx not found. Searched in: {[company_data_path] + alt_paths}")
+                company_data_path = None
+    
     if save_dir is None:
         save_dir = backend_dir / 'preprocessed_unencoded'
     os.makedirs(save_dir, exist_ok=True)
 
-    # Read company data
-    company_df = pd.read_excel(company_data_path, engine='openpyxl')
-    company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+    # Read company data if available
+    company_df = None
+    if company_data_path and Path(company_data_path).exists():
+        try:
+            company_df = pd.read_excel(company_data_path, engine='openpyxl')
+            company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+            print(f"Loaded project info from: {company_data_path}")
+        except Exception as e:
+            print(f"Warning: Could not load project info file: {e}")
+            company_df = None
+    else:
+        print("Project info file not found, proceeding without it")
 
     # Read input file
     ext = str(filepath).split('.')[-1].lower()
@@ -325,11 +359,14 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     # Validate projectid
     if 'projectid' not in df.columns:
         raise ValueError('File must contain a "projectid" column.')
-    if not df['projectid'].isin(company_df['projectid']).all():
-        raise ValueError('Some projectid values are not found in company data.')
-
-    # Merge with company data
-    df = pd.merge(df, company_df, on='projectid', how='left')
+    
+    # Merge with company data if available
+    if company_df is not None:
+        if not df['projectid'].isin(company_df['projectid']).all():
+            print("Warning: Some projectid values are not found in company data.")
+        df = pd.merge(df, company_df, on='projectid', how='left')
+    else:
+        print("Skipping company data merge - file not available")
 
     # Save original column order
     orig_cols = list(df.columns)

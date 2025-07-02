@@ -3,23 +3,30 @@ import pandas as pd
 from typing import Union, List
 import joblib
 import os
+from pathlib import Path
 
 class MLPredictor:
-    def __init__(self, model_dir: str = 'model'):
+    def __init__(self):
         """
         Initialize the ML predictor.
         
         Args:
             model_dir (str): Directory where project models are stored.
         """
-        self.model_dir = model_dir
+        # Fix the model directory path for Docker
+        self.model_dir = Path(__file__).parent  # This will be /app/backend/model in Docker
+        # Alternative: you can also use an absolute path
+        # self.model_dir = Path('/app/backend/model')
+        
         self.models = {}  # <-- Ensure models dict is always initialized
         self._preload_models()  # type: ignore
 
     def _preload_models(self):
         """Preload all models into memory at startup."""
-        import joblib
-        import os
+        if not self.model_dir.exists():
+            print(f"Warning: Model directory {self.model_dir} does not exist")
+            return
+            
         for fname in os.listdir(self.model_dir):
             if fname.startswith("project_") and fname.endswith("_model.pkl"):
                 try:
@@ -79,6 +86,28 @@ class MLPredictor:
         if missing_models:
             print(f"Warning: Missing models for project IDs: {sorted(missing_models)}")
         return data
+
+    def predict_single_project(self, data, project_id):
+        """Generate predictions for a single project ID"""
+        if project_id not in self.models:
+            raise ValueError(f"No model available for project {project_id}")
+        
+        model, expected_features = self.models[project_id]
+        
+        # Ensure data has the expected features
+        missing_features = set(expected_features) - set(data.columns)
+        if missing_features:
+            print(f"Warning: Missing features for project {project_id}: {missing_features}")
+            # Add missing features with default values
+            for feature in missing_features:
+                data[feature] = 0
+        
+        # Select only the expected features in the correct order
+        X = data[expected_features]
+        
+        # Generate predictions
+        predictions = model.predict(X)
+        return predictions
 
     def predict_proba(self, data: pd.DataFrame) -> np.ndarray:
         """

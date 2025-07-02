@@ -11,6 +11,7 @@ import './App.css';
 import ProjectFilters from './components/ProjectFilters';
 import DataStats from './components/DataStats';
 import FeatureImportanceAnalysis from './components/FeatureImportanceAnalysis';
+import InterpretMLAnalysis from './components/InterpretMLAnalysis.fixed';
 
 function App() {
   const [fileData, setFileData] = useState(null);
@@ -25,6 +26,7 @@ function App() {
   const [fileInfo, setFileInfo] = useState(null);
   const [storageStats, setStorageStats] = useState(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showInterpretML, setShowInterpretML] = useState(false);
   
   // Project filtering state
   const [selectedProject, setSelectedProject] = useState(null);
@@ -585,8 +587,8 @@ function App() {
             </Alert>
           )}
 
-          {/* Show the analysis page when requested */}
-          {showAnalysis && fileInfo && (
+          {/* Show the SHAP analysis page when requested */}
+          {showAnalysis && fileInfo && !showInterpretML && (
             <FeatureImportanceAnalysis
               fileInfo={fileInfo}
               onBack={() => setShowAnalysis(false)}
@@ -596,8 +598,19 @@ function App() {
             />
           )}
 
+          {/* Show the InterpretML analysis page when requested */}
+          {showInterpretML && fileInfo && (
+            <InterpretMLAnalysis
+              fileInfo={fileInfo}
+              onBack={() => setShowInterpretML(false)}
+              selectedProject={selectedProject}
+              onSelectProject={handleProjectFilter}
+              availableProjects={availableProjects}
+            />
+          )}
+
           {/* Regular content when not showing analysis */}
-          {!showAnalysis && (
+          {!showAnalysis && !showInterpretML && (
             <>
               {!fileData && (
                 <Card>
@@ -709,14 +722,24 @@ function App() {
                           </p>
                         </Col>
                         <Col md={6} className="d-flex align-items-center justify-content-end">
-                          <Button 
-                            variant="success" 
-                            onClick={() => setShowAnalysis(true)}
-                            className="d-flex align-items-center"
-                          >
-                            <FiBarChart2 className="me-2" />
-                            View Feature Importance Analysis
-                          </Button>
+                          <ButtonGroup>
+                            <Button 
+                              variant="success" 
+                              onClick={() => setShowAnalysis(true)}
+                              className="d-flex align-items-center"
+                            >
+                              <FiBarChart2 className="me-2" />
+                              SHAP Analysis
+                            </Button>
+                            <Button 
+                              variant="info" 
+                              onClick={() => setShowInterpretML(true)}
+                              className="d-flex align-items-center"
+                            >
+                              <FiTrendingUp className="me-2" />
+                              InterpretML Analysis
+                            </Button>
+                          </ButtonGroup>
                         </Col>
                       </Row>
                     </Card.Body>

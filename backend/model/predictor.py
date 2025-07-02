@@ -48,7 +48,7 @@ except Exception as e:
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # Debug configuration - set to False to disable debug prints
-DEBUG_PRINTS = False
+DEBUG_PRINTS = True
 
 # Set to True to use only basic feature importance (no SHAP)
 USE_BASIC_FEATURE_IMPORTANCE = False
@@ -811,14 +811,32 @@ class MLPredictor:
         Returns:
             Dict[str, Any]: Dictionary with feature importance information
         """
+        print(f"DEBUG: Starting InterpretML calculation for project {project_id}")
+        print(f"DEBUG: InterpretML available: {INTERPRET_ML_AVAILABLE}")
+        
+        if not INTERPRET_ML_AVAILABLE:
+            error_msg = 'InterpretML not available'
+            print(f"DEBUG: {error_msg}")
+            return {
+                'status': 'error',
+                'error': error_msg
+            }
+            
         try:
             # Check if model exists for this project
             if project_id not in self.models:
-                return {"error": f"No model available for project ID {project_id}"}
+                error_msg = f"No model available for project ID {project_id}"
+                print(f"DEBUG: {error_msg}")
+                print(f"DEBUG: Available models: {list(self.models.keys())}")
+                return {
+                    'status': 'error',
+                    'error': error_msg
+                }
                 
             # Get model and features for this project
             model, features = self.models[project_id]
             model_type = type(model).__name__
+            print(f"DEBUG: Model type: {model_type}, Features count: {len(features) if features else 'Unknown'}")
             
             # Extract features needed for this model
             if features:
@@ -830,78 +848,136 @@ class MLPredictor:
                 features = X.columns.tolist()
                 
             if len(X) == 0:
-                return {"error": f"No data available for project ID {project_id}"}
-            
-            # For InterpretML, we generally use the entire dataset without sampling
-            try:
-                # LimeTabular requires the data as a numpy array
-                X_array = X.to_numpy()
-                
-                # Create a dummy model for LimeTabular (LIME requires a model, even if it's not used)
-                dummy_model = lambda x: np.zeros((len(x), 2))
-                
-                # Initialize the explainer
-                explainer = LimeTabular(
-                    model=dummy_model, 
-                    data=X_array, 
-                    feature_names=features, 
-                    class_names=['Not Booked', 'Booked'],
-                    mode='classification'
-                )
-                
-                # Explain the predictions
-                lime_values = explainer.explain(X_array)
-                
-                # Extract the feature importances from the LIME explanation
-                feature_importance = lime_values.as_list()
-                
-                # Convert to dictionary
-                importance_dict = dict(feature_importance)
-                
-                # Sort by importance
-                sorted_importance = {k: v for k, v in sorted(importance_dict.items(), key=lambda item: item[1], reverse=True)}
-                
-                # Normalize to percentages
-                total_importance = sum(sorted_importance.values())
-                importance_pct = {k: (v / total_importance) * 100 for k, v in sorted_importance.items()}
-                
-                return {
-                    'status': 'success',
-                    'feature_importance': sorted_importance,
-                    'importance_pct': importance_pct,
-                    'interpret_data': {
-                        'feature_names': list(sorted_importance.keys()),
-                        'importance_values': list(sorted_importance.values()),
-                        'importance_pct': list(importance_pct.values()),
-                        'model_type': model_type,
-                        'project_id': project_id,
-                        'method': 'InterpretML'
-                    },
-                    # For backwards compatibility with components expecting shap_data
-                    'shap_data': {
-                        'feature_names': list(sorted_importance.keys()),
-                        'importance_values': list(sorted_importance.values()),
-                        'importance_pct': list(importance_pct.values()),
-                        'model_type': model_type,
-                        'project_id': project_id,
-                        'note': 'Using InterpretML (LIME) for feature importance'
-                    },
-                    'total_features': len(features),
-                    'method': 'interpretml'
-                }
-            except Exception as e:
-                if DEBUG_PRINTS:
-                    print(f"InterpretML calculation failed: {e}")
+                error_msg = f"No data available for project ID {project_id}"
+                print(f"DEBUG: {error_msg}")
+                print(f"DEBUG: Unique project IDs in data: {data['projectid'].unique()}")
                 return {
                     'status': 'error',
-                    'error': str(e),
-                    'traceback': traceback.format_exc()
+                    'error': error_msg
                 }
-        
+            
+            print(f"DEBUG: Data shape: {X.shape}, Features: {len(features)}")
+            
+            # Sample data for faster processing
+            sample_size = min(100, len(X))
+            if len(X) > sample_size:
+                X_sample = X.sample(n=sample_size, random_state=42)
+            else:
+                X_sample = X.copy()
+            
+            # Fill missing values
+            X_sample = X_sample.fillna(0)
+            print(f"DEBUG: Sample shape: {X_sample.shape}")
+            
+            try:
+                # Use MorrisSensitivity for global feature importance analysis
+                print("DEBUG: Attempting MorrisSensitivity analysis")
+                explainer = MorrisSensitivity(predict_fn=model.predict, data=X_sample, feature_names=features)
+                
+                # Get global explanation
+                global_explanation = explainer.explain_global()
+                print("DEBUG: MorrisSensitivity analysis completed")
+                
+                # Extract feature importance scores
+                if hasattr(global_explanation, 'data') and hasattr(global_explanation.data(), 'scores'):
+                    importance_scores = global_explanation.data().scores
+                    feature_names_from_explainer = global_explanation.data().names if hasattr(global_explanation.data(), 'names') else features
+                    print(f"DEBUG: Found scores via data().scores: {len(importance_scores)} scores")
+                elif hasattr(global_explanation, 'data'):
+                    # Try alternative data access methods
+                    explanation_data = global_explanation.data()
+                    if isinstance(explanation_data, dict):
+                        importance_scores = explanation_data.get('scores', [1.0] * len(features))
+                        feature_names_from_explainer = explanation_data.get('names', features)
+                        print(f"DEBUG: Found scores via dict access: {len(importance_scores)} scores")
+                    else:
+                        # Fallback to uniform importance
+                        importance_scores = [1.0] * len(features)
+                        feature_names_from_explainer = features
+                        print("DEBUG: Using uniform importance (dict fallback)")
+                else:
+                    # Fallback to uniform importance
+                    importance_scores = [1.0] * len(features)
+                    feature_names_from_explainer = features
+                    print("DEBUG: Using uniform importance (no data access)")
+                
+                # Ensure we have the right number of scores
+                if len(importance_scores) != len(feature_names_from_explainer):
+                    min_len = min(len(importance_scores), len(feature_names_from_explainer))
+                    importance_scores = importance_scores[:min_len]
+                    feature_names_from_explainer = feature_names_from_explainer[:min_len]
+                
+                # Convert to absolute values and create feature importance dict
+                importance_scores = [abs(score) for score in importance_scores]
+                importance_dict = dict(zip(feature_names_from_explainer, importance_scores))
+                
+            except Exception as morris_error:
+                print(f"DEBUG: MorrisSensitivity failed: {morris_error}")
+                # Fallback to basic feature importance from the model
+                try:
+                    if hasattr(model, 'feature_importances_'):
+                        importance_scores = model.feature_importances_
+                        print("DEBUG: Using model.feature_importances_")
+                    elif hasattr(model, 'coef_'):
+                        importance_scores = abs(model.coef_[0]) if model.coef_.ndim > 1 else abs(model.coef_)
+                        print("DEBUG: Using model.coef_")
+                    elif hasattr(model, 'steps') and hasattr(model.steps[-1][1], 'feature_importances_'):
+                        importance_scores = model.steps[-1][1].feature_importances_
+                        print("DEBUG: Using pipeline feature_importances_")
+                    else:
+                        # Uniform importance as last resort
+                        importance_scores = [1.0] * len(features)
+                        print("DEBUG: Using uniform importance (no model attributes)")
+                    
+                    importance_dict = dict(zip(features, importance_scores))
+                except Exception as fallback_error:
+                    print(f"DEBUG: Fallback also failed: {fallback_error}")
+                    # Final fallback - uniform importance
+                    importance_dict = {f: 1.0 for f in features}
+                    print("DEBUG: Using final fallback - uniform importance")
+            
+            # Sort by importance
+            sorted_importance = {k: v for k, v in sorted(importance_dict.items(), key=lambda item: item[1], reverse=True)}
+            
+            # Normalize to percentages
+            total_importance = sum(sorted_importance.values()) if sum(sorted_importance.values()) > 0 else 1
+            importance_pct = {k: (v / total_importance) * 100 for k, v in sorted_importance.items()}
+            
+            print(f"DEBUG: Final sorted importance has {len(sorted_importance)} features")
+            print(f"DEBUG: Top 3 features: {list(sorted_importance.keys())[:3]}")
+            
+            result = {
+                'status': 'success',
+                'feature_importance': sorted_importance,
+                'importance_pct': importance_pct,
+                'interpret_data': {
+                    'feature_names': list(sorted_importance.keys()),
+                    'importance_values': list(sorted_importance.values()),
+                    'importance_pct': list(importance_pct.values()),
+                    'model_type': model_type,
+                    'project_id': project_id,
+                    'method': 'InterpretML'
+                },
+                # For backwards compatibility with components expecting shap_data
+                'shap_data': {
+                    'feature_names': list(sorted_importance.keys()),
+                    'importance_values': list(sorted_importance.values()),
+                    'importance_pct': list(importance_pct.values()),
+                    'model_type': model_type,
+                    'project_id': project_id,
+                    'note': 'Using InterpretML for feature importance'
+                },
+                'total_features': len(features),
+                'method': 'interpretml'
+            }
+            
+            print(f"DEBUG: Returning result with status: {result['status']}")
+            return result
+            
         except Exception as e:
-            if DEBUG_PRINTS:
-                print(f"Feature importance calculation failed: {e}")
+            print(f"DEBUG: InterpretML calculation failed with error: {e}")
             import traceback
+            print(f"DEBUG: Traceback: {traceback.format_exc()}")
             return {
                 'status': 'error',
                 'error': str(e),

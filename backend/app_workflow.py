@@ -14,7 +14,7 @@ from preprocessing import preprocess_data, get_raw_preview
 from backend.data_retention import retention_manager
 
 # Debug configuration - set to False to disable debug prints
-DEBUG_PRINTS = False
+DEBUG_PRINTS = True
 
 app = Flask(__name__)
 # Enhanced CORS configuration
@@ -398,62 +398,69 @@ def get_shap_visualization(filename):
             'traceback': traceback.format_exc()
         }), 500
 
-# InterpretML feature importance analysis endpoint
-@app.route('/api/interpret_ml/<filename>', methods=['GET'])
-def get_interpret_ml_analysis(filename):
-    """Get InterpretML feature importance analysis for a file"""
-    try:
-        project_id = request.args.get('project_id')
-        if not project_id:
-            return jsonify({'error': 'project_id is required'}), 400
-            
-        # Load the file
-        file_path = UPLOADS_DIR / filename
-        if not file_path.exists():
-            return jsonify({'error': f'File {filename} not found'}), 404
-            
-        # Read the data
-        df = pd.read_csv(file_path)
-        
-        # Process the data
-        try:
-            processed_df = preprocess_data(str(file_path))
-            if not isinstance(processed_df, pd.DataFrame):
-                processed_df = pd.DataFrame(processed_df)
-        except Exception as e:
-            return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
-        
-        # Analyze using InterpretML
-        try:
-            pid = int(project_id)
-            result = predictor.calculate_interpretML_importance(processed_df, pid)
-            if DEBUG_PRINTS:
-                print(f"InterpretML analysis result keys: {list(result.keys())}")
-                if 'interpret_data' in result:
-                    print(f"InterpretML data keys: {list(result['interpret_data'].keys())}")
-                if 'shap_data' in result:
-                    print(f"SHAP data keys: {list(result['shap_data'].keys())}")
-            
-            # Make sure to include method in both places for clarity
-            if 'interpret_data' in result:
-                result['interpret_data']['method'] = 'InterpretML'
-            
-            response_data = {
-                'project_id': pid,
-                'analysis': result,
-                'method': 'InterpretML'
-            }
-            
-            return jsonify(response_data)
-        except ValueError:
-            return jsonify({'error': f'Invalid project ID: {project_id}'}), 400
-            
-    except Exception as e:
-        import traceback
-        return jsonify({
-            'error': f'Error analyzing with InterpretML: {str(e)}',
-            'traceback': traceback.format_exc()
-        }), 500
+# InterpretML feature importance analysis endpoint - DISABLED
+# @app.route('/api/interpret_ml/<filename>', methods=['GET'])
+# def get_interpret_ml_analysis(filename):
+#     """Get InterpretML feature importance analysis for a file"""
+#     try:
+#         # Get project_id from query parameters
+#         project_id = request.args.get('project_id', None)
+#         pid = int(project_id) if project_id is not None else None
+#
+#         # Check if the file exists
+#         file_path = os.path.join(PREPROCESSED_DIR, filename)
+#         if not os.path.exists(file_path):
+#             return jsonify({
+#                 'success': False,
+#                 'error': f'File not found: {filename}'
+#             }), 404
+#
+#         # Load the preprocessed data
+#         try:
+#             print(f"Loading file for InterpretML analysis: {file_path}")
+#             processed_df = pd.read_csv(file_path)
+#             print(f"File loaded successfully. Shape: {processed_df.shape}")
+#         except Exception as e:
+#             return jsonify({
+#                 'success': False,
+#                 'error': f'Error loading file: {str(e)}'
+#             }), 500
+#
+#         # Analyze using InterpretML
+#         try:
+#             predictor = Predictor()
+#             result = predictor.calculate_interpretML_importance(processed_df, pid)
+#             if 'interpret_data' in result:
+#                 print(f"InterpretML data keys: {list(result['interpret_data'].keys())}")
+#             else:
+#                 print("No interpret_data in result")
+#
+#             # Ensure the method field is set
+#             if 'interpret_data' in result:
+#                 result['interpret_data']['method'] = 'InterpretML'
+#
+#             return jsonify({
+#                 'success': True,
+#                 'analysis': result,
+#                 'method': 'InterpretML'
+#             })
+#
+#         except Exception as e:
+#             print(f"Error in InterpretML analysis: {str(e)}")
+#             import traceback
+#             traceback.print_exc()
+#             return jsonify({
+#                 'success': False,
+#                 'error': f'Error analyzing with InterpretML: {str(e)}',
+#                 'traceback': traceback.format_exc()
+#             }), 500
+#
+#     except Exception as e:
+#         print(f"General error: {str(e)}")
+#         return jsonify({
+#             'success': False,
+#             'error': str(e)
+#         }), 500
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

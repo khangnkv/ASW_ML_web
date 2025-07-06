@@ -62,14 +62,18 @@ def preprocess_dates(df):
     # Process bookingdate  
     if 'bookingdate' in df.columns:
         df['bookingdate'] = df['bookingdate'].apply(fix_year)
-    
-    # Add has_booked column
-    df['has_booked'] = df['bookingdate'].notna().astype(int)
+        # Add has_booked column only if bookingdate exists
+        df['has_booked'] = df['bookingdate'].notna().astype(int)
+    else:
+        # If no bookingdate column, create has_booked as 0 for all rows
+        df['has_booked'] = 0
+        
     return df
 
 def add_seasonal_features(df, date_column):
     """Add seasonal features from a datetime column"""
     if date_column not in df.columns:
+        print(f"Warning: Date column '{date_column}' not found - skipping seasonal features")
         return df
     
     # Ensure the column is datetime
@@ -256,7 +260,14 @@ def run_pipeline(data_path, table_path, output_csv, output_excel):
     df = read_data(data_path, table_path)
     # df = sample_projects(df)
     df = preprocess_dates(df)
-    df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
+    
+    # Condo only filtering - only apply if 'Type' column exists
+    if 'Type' in df.columns:
+        df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
+        print("Filtered for condominiums")
+    else:
+        print("Warning: 'Type' column not found - skipping condo filtering")
+    
     df = add_seasonal_features(df, 'questiondate')
     df = clean_financial_columns(df)
 
@@ -366,6 +377,17 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     if 'projectid' not in df.columns:
         raise ValueError('File must contain a "projectid" column.')
     
+    if DEBUG_PRINTS:
+        print(f"Input data shape: {df.shape}")
+        print(f"Available columns: {list(df.columns)}")
+        missing_common_cols = []
+        common_expected_cols = ['questiondate', 'bookingdate', 'Type', 'gender', 'age']
+        for col in common_expected_cols:
+            if col not in df.columns:
+                missing_common_cols.append(col)
+        if missing_common_cols:
+            print(f"Note: Some common columns are missing: {missing_common_cols}")
+    
     # Merge with company data if available
     if company_df is not None:
         if not df['projectid'].isin(company_df['projectid']).all():
@@ -378,12 +400,30 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     orig_cols = list(df.columns)
 
     # Preprocessing steps (no encoding)
-    df = preprocess_dates(df)
-    #condo only filtering
-    df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
-    df = add_seasonal_features(df, 'questiondate')
-    df = clean_financial_columns(df)
-    # Add more features as needed, but skip encoding
+    try:
+        df = preprocess_dates(df)
+        
+        # Condo only filtering - only apply if 'Type' column exists
+        if 'Type' in df.columns:
+            if DEBUG_PRINTS:
+                print("Filtering for condominiums (Type == 'คอนโดมิเนียม')")
+            initial_count = len(df)
+            df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
+            filtered_count = len(df)
+            if DEBUG_PRINTS:
+                print(f"Filtered from {initial_count} to {filtered_count} rows")
+        else:
+            if DEBUG_PRINTS:
+                print("Warning: 'Type' column not found - skipping condo filtering")
+        
+        df = add_seasonal_features(df, 'questiondate')
+        df = clean_financial_columns(df)
+        # Add more features as needed, but skip encoding
+        
+    except Exception as e:
+        print(f"Error during preprocessing steps: {e}")
+        print(f"Available columns: {list(df.columns)}")
+        raise
 
     # Save processed file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

@@ -82,45 +82,146 @@ def get_models():
 # Export endpoint
 @app.route('/api/export/<format>/<filename>', methods=['GET'])
 def export_results(format, filename):
-    """Export results in specified format"""
+    """Export results in specified format with enhanced functionality"""
     try:
+        if DEBUG_PRINTS:
+            print(f"[EXPORT] Exporting {filename} as {format}")
+        
+        # Look for the file in uploads directory
         file_path = UPLOADS_DIR / filename
         if not file_path.exists():
+            if DEBUG_PRINTS:
+                print(f"[EXPORT] File not found at {file_path}")
             return jsonify({'error': 'File not found'}), 404
         
-        df = pd.read_csv(file_path)
+        # Read the data
+        try:
+            df = pd.read_csv(file_path)
+            if DEBUG_PRINTS:
+                print(f"[EXPORT] Loaded data with {len(df)} rows and {len(df.columns)} columns")
+        except Exception as e:
+            if DEBUG_PRINTS:
+                print(f"[EXPORT] Error reading file: {e}")
+            return jsonify({'error': f'Error reading file: {str(e)}'}), 500
+        
+        # Get original filename without UUID for cleaner export names
+        original_name = filename.replace('.csv', '')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         if format == 'json':
-            # Convert DataFrame to JSON
-            result = df.to_dict(orient='records')
-            return jsonify(result)
+            # Convert DataFrame to JSON with better formatting
+            try:
+                # Convert to records format and handle NaN values
+                result = df.fillna('').to_dict(orient='records')
+                
+                # Create response with proper filename
+                response_data = {
+                    'data': result,
+                    'metadata': {
+                        'total_records': len(result),
+                        'columns': list(df.columns),
+                        'export_timestamp': datetime.now().isoformat(),
+                        'format': 'json'
+                    }
+                }
+                
+                response = jsonify(response_data)
+                response.headers['Content-Disposition'] = f'attachment; filename=predictions_{original_name}_{timestamp}.json'
+                return response
+                
+            except Exception as e:
+                if DEBUG_PRINTS:
+                    print(f"[EXPORT] Error creating JSON: {e}")
+                return jsonify({'error': f'Error creating JSON: {str(e)}'}), 500
+                
         elif format == 'csv':
-            # Return CSV file
-            output = io.StringIO()
-            df.to_csv(output, index=False)
-            output.seek(0)
-            return send_file(
-                io.BytesIO(output.getvalue().encode('utf-8')),
-                mimetype='text/csv',
-                as_attachment=True,
-                download_name=f'predictions_{filename}'
-            )
+            # Return CSV file with proper encoding
+            try:
+                output = io.StringIO()
+                df.to_csv(output, index=False, encoding='utf-8')
+                output.seek(0)
+                
+                return send_file(
+                    io.BytesIO(output.getvalue().encode('utf-8-sig')),  # UTF-8 with BOM for Excel compatibility
+                    mimetype='text/csv',
+                    as_attachment=True,
+                    download_name=f'predictions_{original_name}_{timestamp}.csv'
+                )
+            except Exception as e:
+                if DEBUG_PRINTS:
+                    print(f"[EXPORT] Error creating CSV: {e}")
+                return jsonify({'error': f'Error creating CSV: {str(e)}'}), 500
+                
         elif format == 'xlsx':
-            # Return Excel file
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
-                df.to_excel(writer, index=False, sheet_name='Predictions')
-            output.seek(0)
-            return send_file(
-                output,
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                as_attachment=True,
-                download_name=f'predictions_{filename.replace(".csv", ".xlsx")}'
-            )
+            # Return Excel file with enhanced formatting
+            try:
+                output = io.BytesIO()
+                
+                with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
+                    # Write main data
+                    df.to_excel(writer, index=False, sheet_name='Predictions')
+                    
+                    # Add a summary sheet if we have prediction data
+                    if 'has_booked_prediction' in df.columns:
+                        summary_data = {
+                            'Metric': [
+                                'Total Records',
+                                'Records with Predictions',
+                                'Predicted Positive (Likely to Book)',
+                                'Predicted Negative (Unlikely to Book)',
+                                'Prediction Rate (%)',
+                                'Positive Prediction Rate (%)',
+                                'Export Date'
+                            ],
+                            'Value': [
+                                len(df),
+                                len(df[df['has_booked_prediction'].notna()]),
+                                len(df[df['has_booked_prediction'] >= 0.5]),
+                                len(df[df['has_booked_prediction'] < 0.5]),
+                                f"{(len(df[df['has_booked_prediction'].notna()]) / len(df) * 100):.1f}%",
+                                f"{(len(df[df['has_booked_prediction'] >= 0.5]) / len(df[df['has_booked_prediction'].notna()]) * 100):.1f}%" if len(df[df['has_booked_prediction'].notna()]) > 0 else "N/A",
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            ]
+                        }
+                        summary_df = pd.DataFrame(summary_data)
+                        summary_df.to_excel(writer, index=False, sheet_name='Summary')
+                    
+                    # Auto-adjust column widths
+                    for sheet_name in writer.sheets:
+                        worksheet = writer.sheets[sheet_name]
+                        for column in worksheet.columns:
+                            max_length = 0
+                            column_letter = column[0].column_letter
+                            for cell in column:
+                                try:
+                                    if len(str(cell.value)) > max_length:
+                                        max_length = len(str(cell.value))
+                                except:
+                                    pass
+                            adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+                            worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                output.seek(0)
+                
+                return send_file(
+                    output,
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    as_attachment=True,
+                    download_name=f'predictions_{original_name}_{timestamp}.xlsx'
+                )
+            except Exception as e:
+                if DEBUG_PRINTS:
+                    print(f"[EXPORT] Error creating Excel: {e}")
+                return jsonify({'error': f'Error creating Excel: {str(e)}'}), 500
         else:
-            return jsonify({'error': 'Unsupported export format'}), 400
+            return jsonify({'error': f'Unsupported export format: {format}'}), 400
+            
     except Exception as e:
-        return jsonify({'error': f'Error exporting results: {e}'}), 500
+        if DEBUG_PRINTS:
+            print(f"[EXPORT] General error: {e}")
+            import traceback
+            traceback.print_exc()
+        return jsonify({'error': f'Error exporting results: {str(e)}'}), 500
 
 # Helper: Save uploaded file with UUID
 @app.route('/api/upload_uuid', methods=['POST'])

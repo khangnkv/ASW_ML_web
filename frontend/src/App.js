@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, ButtonGroup } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, ButtonGroup, Modal, ProgressBar } from 'react-bootstrap';
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiBarChart2, FiTrendingUp } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiBarChart2, FiTrendingUp, FiGrid, FiCode } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
@@ -27,6 +27,11 @@ function App() {
   const [storageStats, setStorageStats] = useState(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showInterpretML, setShowInterpretML] = useState(false);
+  
+  // Export state
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportFormat, setExportFormat] = useState('');
   
   // Project filtering state
   const [selectedProject, setSelectedProject] = useState(null);
@@ -261,20 +266,109 @@ function App() {
     }
   };
 
-  // --- Export logic ---
+  // --- Export logic with progress tracking ---
   const exportResults = async (format) => {
-    if (!predictions) return;
+    if (!fileInfo?.filename) {
+      setError('No file available for export');
+      return;
+    }
+
+    setExportLoading(true);
+    setExportProgress(0);
+    setExportFormat(format.toUpperCase());
+    setError(null);
+
     try {
-      const response = await axios.get(`/api/export/${format}/${predictions.results_filename}`, {
+      // Simulate progress updates during export
+      const progressInterval = setInterval(() => {
+        setExportProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 200);
+
+      const startTime = Date.now();
+      
+      // Make the export request
+      const response = await axios.get(`/api/export/${format}/${fileInfo.filename}`, {
         responseType: 'blob',
+        onDownloadProgress: (progressEvent) => {
+          if (progressEvent.lengthComputable) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setExportProgress(Math.max(progress, 90)); // Ensure we show at least 90%
+          }
+        }
       });
+
+      // Clear the interval and set progress to 100%
+      clearInterval(progressInterval);
+      setExportProgress(100);
+
+      // Determine file extension and create filename
       let extension = format;
-      if (format === 'xlsx') extension = 'xlsx';
-      if (format === 'csv') extension = 'csv';
-      if (format === 'json') extension = 'json';
-      saveAs(response.data, `predictions_${fileData.filename.split('.')[0]}.${extension}`);
+      let mimeType = response.headers['content-type'] || '';
+      
+      if (format === 'xlsx') {
+        extension = 'xlsx';
+      } else if (format === 'csv') {
+        extension = 'csv';
+      } else if (format === 'json') {
+        extension = 'json';
+      }
+
+      // Create a more descriptive filename
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:\-T]/g, '');
+      const originalName = fileInfo.originalName ? 
+        fileInfo.originalName.split('.')[0] : 
+        fileInfo.filename.split('.')[0];
+      const filename = `predictions_${originalName}_${timestamp}.${extension}`;
+
+      // Handle different response types
+      let blob;
+      if (format === 'json' && mimeType.includes('application/json')) {
+        // For JSON, we might get a JSON response that we need to convert to blob
+        const jsonData = await response.data.text();
+        blob = new Blob([jsonData], { type: 'application/json' });
+      } else {
+        blob = response.data;
+      }
+
+      // Trigger download
+      saveAs(blob, filename);
+
+      // Calculate and show completion time
+      const completionTime = ((Date.now() - startTime) / 1000).toFixed(1);
+      
+      // Show success message briefly
+      setTimeout(() => {
+        setExportLoading(false);
+        setExportProgress(0);
+        setExportFormat('');
+      }, 1000);
+
+      // Show a success toast or message
+      console.log(`Export completed in ${completionTime}s: ${filename}`);
+      
     } catch (error) {
-      setError('Error exporting results');
+      console.error('Export error:', error);
+      setExportLoading(false);
+      setExportProgress(0);
+      setExportFormat('');
+      
+      if (error.response?.data) {
+        try {
+          const errorText = await error.response.data.text();
+          const errorObj = JSON.parse(errorText);
+          setError(`Export failed: ${errorObj.error || 'Unknown error'}`);
+        } catch {
+          setError('Export failed: Server error');
+        }
+      } else {
+        setError(`Export failed: ${error.message || 'Network error'}`);
+      }
     }
   };
 
@@ -291,6 +385,11 @@ function App() {
     setFullDataset(null);
     setFilteredData(null);
     setFilterLoading(false);
+    
+    // Reset export state
+    setExportLoading(false);
+    setExportProgress(0);
+    setExportFormat('');
   };
 
   const renderPreviewTable = (data, title) => {
@@ -563,6 +662,40 @@ function App() {
     );
   };
 
+  // --- Export Progress Modal ---
+  const renderExportModal = () => (
+    <Modal show={exportLoading} backdrop="static" keyboard={false} centered>
+      <Modal.Header>
+        <Modal.Title>
+          <FiDownload className="me-2" />
+          Exporting {exportFormat} File
+        </Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <div className="text-center">
+          <p className="mb-3">Preparing your {exportFormat} file for download...</p>
+          <ProgressBar 
+            now={exportProgress} 
+            label={`${exportProgress}%`}
+            animated
+            striped
+            variant={exportProgress === 100 ? "success" : "primary"}
+            style={{ height: '25px' }}
+          />
+          <div className="mt-3">
+            <small className="text-muted">
+              {exportProgress < 30 && "Processing data..."}
+              {exportProgress >= 30 && exportProgress < 60 && "Formatting file..."}
+              {exportProgress >= 60 && exportProgress < 90 && "Preparing download..."}
+              {exportProgress >= 90 && exportProgress < 100 && "Almost ready..."}
+              {exportProgress === 100 && "Complete! Download should start automatically."}
+            </small>
+          </div>
+        </div>
+      </Modal.Body>
+    </Modal>
+  );
+
   return (
     <Container fluid className="upload-container">
       <button
@@ -780,25 +913,81 @@ function App() {
                         <Button
                           variant="outline-primary"
                           onClick={() => exportResults('csv')}
-                          className="btn-export"
+                          disabled={exportLoading || loading}
+                          className="btn-export d-flex align-items-center"
                         >
-                          Export as CSV
+                          <FiDatabase className="me-2" />
+                          {exportLoading && exportFormat === 'CSV' ? (
+                            <>
+                              <Spinner
+                                as="span"
+                                animation="border"
+                                size="sm"
+                                role="status"
+                                aria-hidden="true"
+                                className="me-2"
+                              />
+                              Exporting...
+                            </>
+                          ) : (
+                            'Export as CSV'
+                          )}
                         </Button>
                         <Button
                           variant="outline-success"
                           onClick={() => exportResults('xlsx')}
-                          className="btn-export"
+                          disabled={exportLoading || loading}
+                          className="btn-export d-flex align-items-center"
                         >
-                          Export as Excel
+                          <FiGrid className="me-2" />
+                          {exportLoading && exportFormat === 'XLSX' ? (
+                            <>
+                              <Spinner
+                                as="span"
+                                animation="border"
+                                size="sm"
+                                role="status"
+                                aria-hidden="true"
+                                className="me-2"
+                              />
+                              Exporting...
+                            </>
+                          ) : (
+                            'Export as Excel'
+                          )}
                         </Button>
                         <Button
                           variant="outline-info"
                           onClick={() => exportResults('json')}
-                          className="btn-export"
+                          disabled={exportLoading || loading}
+                          className="btn-export d-flex align-items-center"
                         >
-                          Export as JSON
+                          <FiCode className="me-2" />
+                          {exportLoading && exportFormat === 'JSON' ? (
+                            <>
+                              <Spinner
+                                as="span"
+                                animation="border"
+                                size="sm"
+                                role="status"
+                                aria-hidden="true"
+                                className="me-2"
+                              />
+                              Exporting...
+                            </>
+                          ) : (
+                            'Export as JSON'
+                          )}
                         </Button>
                       </div>
+                      {exportLoading && (
+                        <div className="mt-3">
+                          <small className="text-muted">
+                            <FiClock className="me-1" />
+                            Export in progress... Please wait while we prepare your {exportFormat} file.
+                          </small>
+                        </div>
+                      )}
                     </Card.Body>
                   </Card>
                   {/* Upload New File button at the bottom */}
@@ -827,6 +1016,9 @@ function App() {
           )}
         </Col>
       </Row>
+      
+      {/* Export Progress Modal */}
+      {renderExportModal()}
     </Container>
   );
 }

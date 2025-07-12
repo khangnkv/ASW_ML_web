@@ -3,15 +3,13 @@ import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, But
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiBarChart2, FiTrendingUp, FiGrid, FiCode } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiGrid, FiCode } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
 // Import components
 import ProjectFilters from './components/ProjectFilters';
 import DataStats from './components/DataStats';
-import FeatureImportanceAnalysis from './components/FeatureImportanceAnalysis';
-import InterpretMLAnalysis from './components/InterpretMLAnalysis.fixed';
 
 function App() {
   const [fileData, setFileData] = useState(null);
@@ -25,8 +23,6 @@ function App() {
   const [showPreview, setShowPreview] = useState(true);
   const [fileInfo, setFileInfo] = useState(null);
   const [storageStats, setStorageStats] = useState(null);
-  const [showAnalysis, setShowAnalysis] = useState(false);
-  const [showInterpretML, setShowInterpretML] = useState(false);
   
   // Export state
   const [exportLoading, setExportLoading] = useState(false);
@@ -720,300 +716,262 @@ function App() {
             </Alert>
           )}
 
-          {/* Show the SHAP analysis page when requested */}
-          {showAnalysis && fileInfo && !showInterpretML && (
-            <FeatureImportanceAnalysis
-              fileInfo={fileInfo}
-              onBack={() => setShowAnalysis(false)}
-              selectedProject={selectedProject}
-              onSelectProject={handleProjectFilter}
-              availableProjects={availableProjects}
-            />
-          )}
-
-          {/* Show the InterpretML analysis page when requested */}
-          {showInterpretML && fileInfo && (
-            <InterpretMLAnalysis
-              fileInfo={fileInfo}
-              onBack={() => setShowInterpretML(false)}
-              selectedProject={selectedProject}
-              onSelectProject={handleProjectFilter}
-              availableProjects={availableProjects}
-            />
-          )}
-
-          {/* Regular content when not showing analysis */}
-          {!showAnalysis && !showInterpretML && (
-            <>
-              {!fileData && (
-                <Card>
-                  <Card.Body>
-                    <div
-                      {...getRootProps()}
-                      className={`upload-area ${isDragActive ? 'dragover' : ''}`}
-                    >
-                      <input {...getInputProps()} />
-                      <FiUpload size={48} className="text-primary mb-3" />
-                      <h4>Drop your file here, or click to select</h4>
-                      <p className="text-muted" style={{ color: 'var(--bs.body-color)' }}>
-                        Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
-                      </p>
-                      <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
-                        File must contain a "projectid" column
-                      </p>
-                    </div>
-                  </Card.Body>
-                </Card>
-              )}
-
-              {loading && (
-                <div className="loading-spinner">
-                  <div className="text-center">
-                    <Spinner animation="border" role="status" className="mb-3">
-                      <span className="visually-hidden">Loading...</span>
-                    </Spinner>
-                    <p>Processing your file...</p>
+          {/* Regular content */}
+          <>
+            {!fileData && (
+              <Card>
+                <Card.Body>
+                  <div
+                    {...getRootProps()}
+                    className={`upload-area ${isDragActive ? 'dragover' : ''}`}
+                  >
+                    <input {...getInputProps()} />
+                    <FiUpload size={48} className="text-primary mb-3" />
+                    <h4>Drop your file here, or click to select</h4>
+                    <p className="text-muted" style={{ color: 'var(--bs.body-color)' }}>
+                      Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
+                    </p>
+                    <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
+                      File must contain a "projectid" column
+                    </p>
                   </div>
+                </Card.Body>
+              </Card>
+            )}
+
+            {loading && (
+              <div className="loading-spinner">
+                <div className="text-center">
+                  <Spinner animation="border" role="status" className="mb-3">
+                    <span className="visually-hidden">Loading...</span>
+                  </Spinner>
+                  <p>Processing your file...</p>
                 </div>
-              )}
+              </div>
+            )}
 
-              {fileData && !loading && showPreview && (
-                <>
-                  <Card className="mb-4">
-                    <Card.Header>
-                      <h5 className="mb-0">File Information</h5>
-                    </Card.Header>
-                    <Card.Body>
-                      <Row>
-                        <Col md={6}>
-                          <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
-                        </Col>
-                        <Col md={6}>
-                          <Button
-                            variant="primary"
-                            onClick={generatePredictions}
-                            disabled={loading || !fileData}
-                            className="me-2"
-                          >
-                            <FiDatabase className="me-2" />
-                            Generate Predictions
-                          </Button>
-                          <Button variant="outline-secondary" onClick={cleanup}>
-                            Upload New File
-                          </Button>
-                        </Col>
-                      </Row>
-                    </Card.Body>
-                  </Card>
-                  
-                  {/* Project Filters */}
-                  <ProjectFilters
-                    projects={availableProjects}
-                    selectedProject={selectedProject}
-                    onSelect={handleProjectFilter}
-                    onReset={handleFilterReset}
-                    disabled={loading}
-                    className="mb-4"
-                  />
-                  
-                  {/* Data Statistics */}
-                  <DataStats
-                    data={currentData}
-                    title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
-                    className="mb-4"
-                  />
-                  
-                  {renderPreviewControls()}
-                  {/* Preview Table - Only shown when showPreview is true */}
-                  {showPreview && (
-                    (!previewRows || previewRows.length === 0) ? (
-                      <Alert variant="warning">No preview data available for this file.</Alert>
-                    ) : (
-                      renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
-                    )
-                  )}
-                </>
-              )}
-
-              {predictions && !loading && (
-                <>
-                  <Card className="mb-4">
-                    <Card.Header>
-                      <h5 className="mb-0">Prediction Results Summary</h5>
-                    </Card.Header>
-                    <Card.Body>
-                      <Row>
-                        <Col md={6}>
-                          <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
-                          <p><strong>Prediction Distribution:</strong> 
-                            {predictions.stats?.prediction_distribution ? 
-                              (predictions.stats.prediction_distribution['1'] > 0 ? 
-                                `${predictions.stats.prediction_distribution['1']} potential customers, ` : '') +
-                              (predictions.stats.prediction_distribution['0'] > 0 ? 
-                                `${predictions.stats.prediction_distribution['0']} not potential customers` : '')
-                              : '-'}
-                          </p>
-                        </Col>
-                        <Col md={6} className="d-flex align-items-center justify-content-end">
-                          <ButtonGroup>
-                            <Button 
-                              variant="success" 
-                              onClick={() => setShowAnalysis(true)}
-                              className="d-flex align-items-center"
-                            >
-                              <FiBarChart2 className="me-2" />
-                              SHAP Analysis
-                            </Button>
-                            <Button 
-                              variant="info" 
-                              onClick={() => setShowInterpretML(true)}
-                              className="d-flex align-items-center"
-                            >
-                              <FiTrendingUp className="me-2" />
-                              InterpretML Analysis
-                            </Button>
-                          </ButtonGroup>
-                        </Col>
-                      </Row>
-                    </Card.Body>
-                  </Card>
-                  {/* --- New Prediction Statistics Card --- */}
-                  {renderPredictionStats()}
-                  {/* Project Filters for Prediction Results */}
-                  <ProjectFilters
-                    projects={availableProjects}
-                    selectedProject={selectedProject}
-                    onSelect={handleProjectFilter}
-                    onReset={handleFilterReset}
-                    disabled={loading}
-                    className="mb-4"
-                  />
-                  
-                  {/* Prediction Data Statistics */}
-                  <DataStats
-                    data={currentData}
-                    title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
-                    className="mb-4"
-                  />
-                  
-                  {renderPreviewControls()}
-                  {/* Final Prediction Preview */}
-                  <h4 className="mt-3 mb-3" style={{ color: '#0d6efd' }}>Final Prediction Preview: Prediction Results</h4>
-                  {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
-                  
-                  <Card>
-                    <Card.Header>
-                      <h5 className="mb-0">
-                        <FiDownload className="me-2" />
-                        Export Results
-                      </h5>
-                    </Card.Header>
-                    <Card.Body>
-                      <div className="d-flex flex-wrap gap-2">
+            {fileData && !loading && showPreview && (
+              <>
+                <Card className="mb-4">
+                  <Card.Header>
+                    <h5 className="mb-0">File Information</h5>
+                  </Card.Header>
+                  <Card.Body>
+                    <Row>
+                      <Col md={6}>
+                        <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
+                      </Col>
+                      <Col md={6}>
                         <Button
-                          variant="outline-primary"
-                          onClick={() => exportResults('csv')}
-                          disabled={exportLoading || loading}
-                          className="btn-export d-flex align-items-center"
+                          variant="primary"
+                          onClick={generatePredictions}
+                          disabled={loading || !fileData}
+                          className="me-2"
                         >
                           <FiDatabase className="me-2" />
-                          {exportLoading && exportFormat === 'CSV' ? (
-                            <>
-                              <Spinner
-                                as="span"
-                                animation="border"
-                                size="sm"
-                                role="status"
-                                aria-hidden="true"
-                                className="me-2"
-                              />
-                              Exporting...
-                            </>
-                          ) : (
-                            'Export as CSV'
-                          )}
+                          Generate Predictions
                         </Button>
-                        <Button
-                          variant="outline-success"
-                          onClick={() => exportResults('xlsx')}
-                          disabled={exportLoading || loading}
-                          className="btn-export d-flex align-items-center"
-                        >
-                          <FiGrid className="me-2" />
-                          {exportLoading && exportFormat === 'XLSX' ? (
-                            <>
-                              <Spinner
-                                as="span"
-                                animation="border"
-                                size="sm"
-                                role="status"
-                                aria-hidden="true"
-                                className="me-2"
-                              />
-                              Exporting...
-                            </>
-                          ) : (
-                            'Export as Excel'
-                          )}
+                        <Button variant="outline-secondary" onClick={cleanup}>
+                          Upload New File
                         </Button>
-                        <Button
-                          variant="outline-info"
-                          onClick={() => exportResults('json')}
-                          disabled={exportLoading || loading}
-                          className="btn-export d-flex align-items-center"
-                        >
-                          <FiCode className="me-2" />
-                          {exportLoading && exportFormat === 'JSON' ? (
-                            <>
-                              <Spinner
-                                as="span"
-                                animation="border"
-                                size="sm"
-                                role="status"
-                                aria-hidden="true"
-                                className="me-2"
-                              />
-                              Exporting...
-                            </>
-                          ) : (
-                            'Export as JSON'
-                          )}
+                      </Col>
+                    </Row>
+                  </Card.Body>
+                </Card>
+                
+                {/* Project Filters */}
+                <ProjectFilters
+                  projects={availableProjects}
+                  selectedProject={selectedProject}
+                  onSelect={handleProjectFilter}
+                  onReset={handleFilterReset}
+                  disabled={loading}
+                  className="mb-4"
+                />
+                
+                {/* Data Statistics */}
+                <DataStats
+                  data={currentData}
+                  title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
+                  className="mb-4"
+                />
+                
+                {renderPreviewControls()}
+                {/* Preview Table - Only shown when showPreview is true */}
+                {showPreview && (
+                  (!previewRows || previewRows.length === 0) ? (
+                    <Alert variant="warning">No preview data available for this file.</Alert>
+                  ) : (
+                    renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
+                  )
+                )}
+              </>
+            )}
+
+            {predictions && !loading && (
+              <>
+                <Card className="mb-4">
+                  <Card.Header>
+                    <h5 className="mb-0">Prediction Results Summary</h5>
+                  </Card.Header>
+                  <Card.Body>
+                    <Row>
+                      <Col md={8}>
+                        <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
+                        <p><strong>Prediction Distribution:</strong> 
+                          {predictions.stats?.prediction_distribution ? 
+                            (predictions.stats.prediction_distribution['1'] > 0 ? 
+                              `${predictions.stats.prediction_distribution['1']} potential customers, ` : '') +
+                            (predictions.stats.prediction_distribution['0'] > 0 ? 
+                              `${predictions.stats.prediction_distribution['0']} not potential customers` : '')
+                            : '-'}
+                        </p>
+                      </Col>
+                      <Col md={4} className="d-flex align-items-center justify-content-end">
+                        <Button variant="outline-secondary" onClick={cleanup}>
+                          Upload New File
                         </Button>
+                      </Col>
+                    </Row>
+                  </Card.Body>
+                </Card>
+                {/* --- New Prediction Statistics Card --- */}
+                {renderPredictionStats()}
+                {/* Project Filters for Prediction Results */}
+                <ProjectFilters
+                  projects={availableProjects}
+                  selectedProject={selectedProject}
+                  onSelect={handleProjectFilter}
+                  onReset={handleFilterReset}
+                  disabled={loading}
+                  className="mb-4"
+                />
+                
+                {/* Prediction Data Statistics */}
+                <DataStats
+                  data={currentData}
+                  title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
+                  className="mb-4"
+                />
+                
+                {renderPreviewControls()}
+                {/* Final Prediction Preview */}
+                <h4 className="mt-3 mb-3" style={{ color: '#0d6efd' }}>Final Prediction Preview: Prediction Results</h4>
+                {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
+                
+
+                <Card>
+                  <Card.Header>
+                    <h5 className="mb-0">
+                      <FiDownload className="me-2" />
+                      Export Results
+                    </h5>
+                  </Card.Header>
+                  <Card.Body>
+                    <div className="d-flex flex-wrap gap-2">
+                      <Button
+                        variant="outline-primary"
+                        onClick={() => exportResults('csv')}
+                        disabled={exportLoading || loading}
+                        className="btn-export d-flex align-items-center"
+                      >
+                        <FiDatabase className="me-2" />
+                        {exportLoading && exportFormat === 'CSV' ? (
+                          <>
+                            <Spinner
+                              as="span"
+                              animation="border"
+                              size="sm"
+                              role="status"
+                              aria-hidden="true"
+                              className="me-2"
+                            />
+                            Exporting...
+                          </>
+                        ) : (
+                          'Export as CSV'
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline-success"
+                        onClick={() => exportResults('xlsx')}
+                        disabled={exportLoading || loading}
+                        className="btn-export d-flex align-items-center"
+                      >
+                        <FiGrid className="me-2" />
+                        {exportLoading && exportFormat === 'XLSX' ? (
+                          <>
+                            <Spinner
+                              as="span"
+                              animation="border"
+                              size="sm"
+                              role="status"
+                              aria-hidden="true"
+                              className="me-2"
+                            />
+                            Exporting...
+                          </>
+                        ) : (
+                          'Export as Excel'
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline-info"
+                        onClick={() => exportResults('json')}
+                        disabled={exportLoading || loading}
+                        className="btn-export d-flex align-items-center"
+                      >
+                        <FiCode className="me-2" />
+                        {exportLoading && exportFormat === 'JSON' ? (
+                          <>
+                            <Spinner
+                              as="span"
+                              animation="border"
+                              size="sm"
+                              role="status"
+                              aria-hidden="true"
+                              className="me-2"
+                            />
+                            Exporting...
+                          </>
+                        ) : (
+                          'Export as JSON'
+                        )}
+                      </Button>
+                    </div>
+                    {exportLoading && (
+                      <div className="mt-3">
+                        <small className="text-muted">
+                          <FiClock className="me-1" />
+                          Export in progress... Please wait while we prepare your {exportFormat} file.
+                        </small>
                       </div>
-                      {exportLoading && (
-                        <div className="mt-3">
-                          <small className="text-muted">
-                            <FiClock className="me-1" />
-                            Export in progress... Please wait while we prepare your {exportFormat} file.
-                          </small>
-                        </div>
-                      )}
-                    </Card.Body>
-                  </Card>
-                  {/* Upload New File button at the bottom */}
-                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
-                    <Button
-                      variant="secondary"
-                      size="lg"
-                      onClick={cleanup}
-                      style={{ minWidth: 220, fontWeight: 600 }}
-                    >
-                      Upload New File
-                    </Button>
-                  </div>
-                </>
-              )}
+                    )}
+                  </Card.Body>
+                </Card>
+                {/* Upload New File button at the bottom */}
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    onClick={cleanup}
+                    style={{ minWidth: 220, fontWeight: 600 }}
+                  >
+                    Upload New File
+                  </Button>
+                </div>
+              </>
+            )}
 
-              {fileInfo && (
-                <>
-                  {renderFileRetentionInfo()}
-                  {renderStorageStats()}
-                </>
-              )}
+            {fileInfo && (
+              <>
+                {renderFileRetentionInfo()}
+                {renderStorageStats()}
+              </>
+            )}
 
-              {/* End of content */}
-            </>
-          )}
+            {/* End of content */}
+          </>
         </Col>
       </Row>
       

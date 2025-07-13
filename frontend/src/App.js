@@ -3,7 +3,7 @@ import { Container, Row, Col, Card, Button, Alert, Spinner, Badge, Dropdown, But
 import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import { saveAs } from 'file-saver';
-import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiGrid, FiCode } from 'react-icons/fi';
+import { FiUpload, FiDownload, FiDatabase, FiSun, FiMoon, FiClock, FiInfo, FiGrid, FiCode, FiBarChart2 } from 'react-icons/fi';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
@@ -692,6 +692,27 @@ function App() {
     </Modal>
   );
 
+  // Handle SHAP analysis
+  const handleShapAnalysis = async () => {
+    if (!fileInfo?.filename || !selectedProject) {
+      setError('Please select a project for SHAP analysis');
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const response = await axios.get(
+        `/api/shap_analysis/${fileInfo.filename}?project_id=${selectedProject}`
+      );
+      console.log('SHAP Analysis Result:', response.data);
+      // Handle the SHAP results here
+    } catch (error) {
+      setError('SHAP analysis failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Container fluid className="upload-container">
       <button
@@ -828,6 +849,17 @@ function App() {
                         </p>
                       </Col>
                       <Col md={4} className="d-flex align-items-center justify-content-end">
+                        <ButtonGroup className="me-2">
+                          <Button
+                            variant="success"
+                            onClick={() => handleShapAnalysis()}
+                            disabled={loading}
+                            size="sm"
+                          >
+                            <FiBarChart2 className="me-1" />
+                            SHAP Analysis
+                          </Button>
+                        </ButtonGroup>
                         <Button variant="outline-secondary" onClick={cleanup}>
                           Upload New File
                         </Button>

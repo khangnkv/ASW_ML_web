@@ -38,6 +38,12 @@ function App() {
   const [previewNumRows, setPreviewNumRows] = useState(5);
   const [previewSection, setPreviewSection] = useState('both'); // 'head', 'tail', 'both'
 
+  // Explainability state
+  const [explainabilityData, setExplainabilityData] = useState(null);
+  const [explainabilityLoading, setExplainabilityLoading] = useState(false);
+  const [showExplainability, setShowExplainability] = useState(false);
+  const [explainableProjects, setExplainableProjects] = useState([]);
+
   useEffect(() => {
     // Fetch available models on component mount
     fetchAvailableModels();
@@ -235,6 +241,14 @@ function App() {
       if (response.data.predictions) {
         setPredictions(response.data.predictions);
         
+        // Update fileInfo to include processed filename for explainability
+        if (response.data.processed_filename) {
+          setFileInfo(prev => ({
+            ...prev,
+            processed_filename: response.data.processed_filename
+          }));
+        }
+        
         // Update the full dataset with the complete prediction results
         if (response.data.complete_dataset) {
           setFullDataset(response.data.complete_dataset);
@@ -386,6 +400,12 @@ function App() {
     setExportLoading(false);
     setExportProgress(0);
     setExportFormat('');
+    
+    // Reset explainability state
+    setExplainabilityData(null);
+    setExplainabilityLoading(false);
+    setShowExplainability(false);
+    setExplainableProjects([]);
   };
 
   const renderPreviewTable = (data, title) => {
@@ -692,6 +712,327 @@ function App() {
     </Modal>
   );
 
+  // Fetch explainable projects
+  const fetchExplainableProjects = async () => {
+    if (!fileInfo?.filename) return;
+    
+    try {
+      console.log('Fetching explainable projects for:', fileInfo.filename);
+      
+      // Use processed filename if available, otherwise use original
+      const filename = fileInfo.processed_filename || fileInfo.filename;
+      
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.get(`${API_URL}/api/explain/projects/${filename}`);
+      
+      console.log('Explainable projects response:', response.data);
+      
+      if (response.data.explainable_projects) {
+        setExplainableProjects(response.data.explainable_projects);
+        console.log('Set explainable projects:', response.data.explainable_projects);
+      }
+      
+      // Show debugging info if no predictions found
+      if (!response.data.has_predictions) {
+        console.warn('No predictions found in file. Prediction columns found:', response.data.prediction_columns_found);
+      }
+    } catch (error) {
+      console.error('Error fetching explainable projects:', error);
+    }
+  };
+
+  // Generate explanations
+  const generateExplanations = async (projectId) => {
+    if (!fileInfo?.filename) {
+      setError('No file available for explanation');
+      return;
+    }
+
+    // Use processed filename if available, otherwise use original
+    const filename = fileInfo.processed_filename || fileInfo.filename;
+    
+    console.log('Generating explanations for project:', projectId, 'file:', filename);
+
+    setExplainabilityLoading(true);
+    setError(null);
+
+    try {
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.post(
+        `${API_URL}/api/explain/${projectId}/${filename}`,
+        {},
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+
+      console.log('Explanation response:', response.data);
+      setExplainabilityData(response.data);
+      setShowExplainability(true);
+
+    } catch (error) {
+      console.error('Explainability error:', error);
+      console.error('Error response:', error.response?.data);
+      
+      const errorMessage = error.response?.data?.error || 'Failed to generate explanations';
+      setError(`Explainability Error: ${errorMessage}`);
+    } finally {
+      setExplainabilityLoading(false);
+    }
+  };
+
+  // --- Explainability UI ---
+  const renderExplainabilityControls = () => {
+    if (!predictions || explainableProjects.length === 0) return null;
+
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <h5 className="mb-0">
+            <FiInfo className="me-2" />
+            Model Explainability Analysis
+          </h5>
+        </Card.Header>
+        <Card.Body>
+          <p className="text-muted mb-3">
+            Analyze model predictions using feature importance and conditional probability analysis for specific projects.
+          </p>
+          
+          <div className="d-flex flex-wrap gap-2">
+            {explainableProjects.map(project => (
+              <Button
+                key={project.project_id}
+                variant="outline-info"
+                size="sm"
+                onClick={() => generateExplanations(project.project_id)}
+                disabled={explainabilityLoading}
+                className="d-flex align-items-center"
+              >
+                {explainabilityLoading ? (
+                  <Spinner animation="border" size="sm" className="me-2" />
+                ) : (
+                  <FiInfo className="me-2" />
+                )}
+                Project {project.project_id} ({project.sample_count} samples)
+              </Button>
+            ))}
+          </div>
+          
+          {explainabilityLoading && (
+            <div className="mt-3">
+              <small className="text-muted">
+                Generating model analysis... This may take a moment.
+              </small>
+            </div>
+          )}
+        </Card.Body>
+      </Card>
+    );
+  };
+
+  const renderExplainabilitySection = () => {
+    if (!showExplainability || !explainabilityData) return null;
+
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <div className="d-flex justify-content-between align-items-center">
+            <h5 className="mb-0">
+              <FiInfo className="me-2" />
+              Model Analysis - Project {explainabilityData.project_id}
+            </h5>
+            <Button 
+              variant="outline-secondary" 
+              size="sm"
+              onClick={() => setShowExplainability(false)}
+            >
+              Close
+            </Button>
+          </div>
+        </Card.Header>
+        <Card.Body>
+          {/* Summary */}
+          <Row className="mb-4">
+            <Col md={4}>
+              <div className="text-center">
+                <div className="stats-number text-primary">{explainabilityData.sample_size}</div>
+                <div className="text-muted">Samples Analyzed</div>
+              </div>
+            </Col>
+            <Col md={4}>
+              <div className="text-center">
+                <div className="stats-number text-info">
+                  {explainabilityData.feature_importance?.success ? 'Available' : 'N/A'}
+                </div>
+                <div className="text-muted">Feature Importance</div>
+              </div>
+            </Col>
+            <Col md={4}>
+              <div className="text-center">
+                <div className="stats-number text-success">
+                  {explainabilityData.conditional_analysis?.success ? 'Available' : 'N/A'}
+                </div>
+                <div className="text-muted">Conditional Analysis</div>
+              </div>
+            </Col>
+          </Row>
+
+          {/* Feature Importance Results */}
+          {explainabilityData.feature_importance?.success && (
+            <Card className="mb-4">
+              <Card.Header>
+                <h6 className="mb-0">
+                  <FiInfo className="me-2" />
+                  Feature Importance ({explainabilityData.feature_importance.model_type})
+                </h6>
+              </Card.Header>
+              <Card.Body className="p-0">
+                <div className="table-responsive">
+                  <table className="table table-sm mb-0">
+                    <thead className="table-primary">
+                      <tr>
+                        <th>Rank</th>
+                        <th>Feature</th>
+                        <th>Importance</th>
+                        <th>Normalized</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {explainabilityData.feature_importance.top_features.map((feature, index) => (
+                        <tr key={index}>
+                          <td>
+                            <Badge bg="primary">{feature.rank}</Badge>
+                          </td>
+                          <td className="fw-bold">{feature.feature}</td>
+                          <td>{feature.importance.toFixed(4)}</td>
+                          <td>
+                            <div className="progress" style={{ height: '20px', minWidth: '100px' }}>
+                              <div 
+                                className="progress-bar" 
+                                style={{ width: `${feature.importance_normalized * 100}%` }}
+                              >
+                                {(feature.importance_normalized * 100).toFixed(1)}%
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card.Body>
+            </Card>
+          )}
+
+          {/* Conditional Analysis Results */}
+          {explainabilityData.conditional_analysis?.success && (
+            <>
+              <Card className="mb-4">
+                <Card.Header>
+                  <h6 className="mb-0">
+                    <FiInfo className="me-2" />
+                    Conditional Analysis Summary
+                  </h6>
+                </Card.Header>
+                <Card.Body>
+                  <Row>
+                    <Col md={3}>
+                      <div className="text-center">
+                        <div className="stats-number text-info">
+                          {explainabilityData.conditional_analysis.overall_stats.features_analyzed}
+                        </div>
+                        <div className="text-muted">Features Analyzed</div>
+                      </div>
+                    </Col>
+                    <Col md={3}>
+                      <div className="text-center">
+                        <div className="stats-number text-success">
+                          {(explainabilityData.conditional_analysis.overall_stats.positive_rate * 100).toFixed(1)}%
+                        </div>
+                        <div className="text-muted">Baseline Positive Rate</div>
+                      </div>
+                    </Col>
+                    <Col md={3}>
+                      <div className="text-center">
+                        <div className="stats-number text-primary">
+                          {explainabilityData.conditional_analysis.analysis_summary.high_impact_features?.length || 0}
+                        </div>
+                        <div className="text-muted">High Impact Features</div>
+                      </div>
+                    </Col>
+                    <Col md={3}>
+                      <div className="text-center">
+                        <div className="stats-number text-warning">
+                          {explainabilityData.conditional_analysis.analysis_summary.low_impact_features?.length || 0}
+                        </div>
+                        <div className="text-muted">Low Impact Features</div>
+                      </div>
+                    </Col>
+                  </Row>
+                </Card.Body>
+              </Card>
+
+              {/* High Impact Features */}
+              {explainabilityData.conditional_analysis.analysis_summary.high_impact_features?.length > 0 && (
+                <Card className="mb-4">
+                  <Card.Header>
+                    <h6 className="mb-0">High Impact Features</h6>
+                  </Card.Header>
+                  <Card.Body className="p-0">
+                    <div className="table-responsive">
+                      <table className="table table-sm mb-0">
+                        <thead className="table-success">
+                          <tr>
+                            <th>Feature</th>
+                            <th>Probability Range</th>
+                            <th>Highest Category</th>
+                            <th>Max Probability</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {explainabilityData.conditional_analysis.analysis_summary.high_impact_features.map((feature, index) => (
+                            <tr key={index}>
+                              <td className="fw-bold">{feature.feature}</td>
+                              <td>
+                                <Badge bg="success">
+                                  {(feature.prob_range * 100).toFixed(1)}%
+                                </Badge>
+                              </td>
+                              <td>{feature.highest_category}</td>
+                              <td>{(feature.highest_prob * 100).toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card.Body>
+                </Card>
+              )}
+            </>
+          )}
+
+          {/* Error Messages */}
+          {explainabilityData.feature_importance?.success === false && (
+            <Alert variant="warning">
+              Feature Importance Error: {explainabilityData.feature_importance.error}
+            </Alert>
+          )}
+          
+          {explainabilityData.conditional_analysis?.success === false && (
+            <Alert variant="warning">
+              Conditional Analysis Error: {explainabilityData.conditional_analysis.error}
+            </Alert>
+          )}
+        </Card.Body>
+      </Card>
+    );
+  };
+
+  // Update your useEffect to fetch explainable projects when predictions are generated
+  useEffect(() => {
+    if (predictions && fileInfo?.filename) {
+      fetchExplainableProjects();
+    }
+  }, [predictions, fileInfo]);
+
   return (
     <Container fluid className="upload-container">
       <button
@@ -967,6 +1308,14 @@ function App() {
               <>
                 {renderFileRetentionInfo()}
                 {renderStorageStats()}
+              </>
+            )}
+
+            {/* Explainability section - only show if predictions exist */}
+            {predictions && (
+              <>
+                {renderExplainabilityControls()}
+                {renderExplainabilitySection()}
               </>
             )}
 

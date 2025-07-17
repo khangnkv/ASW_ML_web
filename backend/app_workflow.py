@@ -342,6 +342,50 @@ def predict_workflow():
             # Add confidence scores
             result_df = predictor.add_prediction_confidence(result_df)
             
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Result data shape: {result_df.shape}")
+                print(f"[PREDICT] Result columns: {list(result_df.columns)}")
+            
+            # 4. Save the PROCESSED data with predictions (not raw data)
+            processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
+            processed_path = UPLOADS_DIR / processed_filename
+            result_df.to_csv(processed_path, index=False)
+            
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Saved processed data with predictions to: {processed_path}")
+            
+            # 5. Merge predictions back to raw data for frontend display
+            # Create a mapping of predictions by projectid
+            prediction_mapping = {}
+            for idx, row in result_df.iterrows():
+                project_id = row['projectid']
+                if project_id not in prediction_mapping:
+                    prediction_mapping[project_id] = []
+                prediction_mapping[project_id].append({
+                    'has_booked_prediction': row.get('has_booked_prediction', np.nan),
+                    'prediction_confidence': row.get('prediction_confidence', 0.5),
+                    'row_index': idx
+                })
+            
+            # Add predictions to raw data for frontend display
+            raw_with_predictions = raw_df.copy()
+            raw_with_predictions['has_booked_prediction'] = np.nan
+            raw_with_predictions['prediction_confidence'] = 0.5
+            
+            # Map predictions back to raw data rows
+            for idx, row in raw_with_predictions.iterrows():
+                project_id = row['projectid']
+                if project_id in prediction_mapping and prediction_mapping[project_id]:
+                    # Take the first available prediction for this project
+                    pred_data = prediction_mapping[project_id].pop(0)
+                    raw_with_predictions.loc[idx, 'has_booked_prediction'] = pred_data['has_booked_prediction']
+                    raw_with_predictions.loc[idx, 'prediction_confidence'] = pred_data['prediction_confidence']
+            
+            # Save raw data with predictions for frontend
+            raw_with_pred_filename = filename  # Overwrite original file
+            raw_with_pred_path = UPLOADS_DIR / raw_with_pred_filename
+            raw_with_predictions.to_csv(raw_with_pred_path, index=False)
+            
             # Extract predictions from the result
             predictions_list = []
             prediction_counts = {'likely': 0, 'unlikely': 0}
@@ -366,8 +410,8 @@ def predict_workflow():
             if DEBUG_PRINTS:
                 print(f"[PREDICT] Generated {len(predictions_list)} predictions")
             
-            # Return the complete dataset with predictions for the frontend table
-            complete_dataset = sanitize_records(result_df.to_dict(orient='records'))
+            # Return the raw dataset with predictions for the frontend table
+            complete_dataset = sanitize_records(raw_with_predictions.to_dict(orient='records'))
             
             response_data = {
                 'predictions': predictions_list,
@@ -375,6 +419,7 @@ def predict_workflow():
                 'raw_preview': sanitize_records(raw_df.head(5).to_dict(orient='records')),
                 'processed_preview': sanitize_records(processed_df.head(5).to_dict(orient='records')),
                 'prediction_counts': prediction_counts,
+                'processed_filename': processed_filename,  # Add this for explainability
                 'summary': {
                     'total_rows': len(processed_df),
                     'projects_processed': len(processed_df['projectid'].unique()) if 'projectid' in processed_df.columns else 0,
@@ -387,6 +432,8 @@ def predict_workflow():
         except Exception as e:
             if DEBUG_PRINTS:
                 print(f"[PREDICT] Prediction error: {e}")
+                import traceback
+                traceback.print_exc()
             return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
             
     except Exception as e:
@@ -395,6 +442,168 @@ def predict_workflow():
             import traceback
             traceback.print_exc()
         return jsonify({'error': f'Error processing request: {str(e)}'}), 500
+
+# Explainability endpoints
+@app.route('/api/explain/<int:project_id>/<filename>', methods=['POST'])
+def explain_predictions(project_id, filename):
+    """Generate explainability analysis for a specific project."""
+    if DEBUG_PRINTS:
+        print(f"[EXPLAIN] /api/explain/{project_id}/{filename} endpoint called")
+    
+    try:
+        # First try to find the processed file
+        processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
+        processed_path = UPLOADS_DIR / processed_filename
+        
+        # If processed file exists, use it; otherwise fall back to original
+        if processed_path.exists():
+            upload_path = processed_path
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Using processed file: {upload_path}")
+        else:
+            upload_path = UPLOADS_DIR / filename
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Using original file: {upload_path}")
+        
+        if not upload_path.exists():
+            return jsonify({'error': f'File {filename} not found'}), 404
+        
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN] Processing project {project_id}")
+        
+        # Read the file with predictions
+        if str(upload_path).endswith('.csv'):
+            df = pd.read_csv(upload_path, low_memory=False)  # Add low_memory=False
+        else:
+            df = pd.read_excel(upload_path)
+        
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN] Loaded file with columns: {list(df.columns)}")
+            print(f"[EXPLAIN] Data shape: {df.shape}")
+        
+        # Check if predictions exist (check multiple possible column names)
+        prediction_cols = ['has_booked_prediction', 'has_booked', 'prediction', 'has_booked_pred']
+        has_predictions = any(col in df.columns for col in prediction_cols)
+        
+        if not has_predictions:
+            return jsonify({
+                'error': f'No predictions found. Available columns: {list(df.columns)}. Expected one of: {prediction_cols}'
+            }), 400
+        
+        # Convert project_id to match data types
+        if 'projectid' in df.columns:
+            # Ensure projectid column is consistent type
+            df['projectid'] = df['projectid'].astype(str)
+            project_id_str = str(project_id)
+            
+            # Check if this project exists in the data
+            project_exists = project_id_str in df['projectid'].unique()
+            if not project_exists:
+                available_projects = df['projectid'].unique().tolist()
+                return jsonify({
+                    'error': f'Project {project_id} not found in data. Available projects: {available_projects}'
+                }), 400
+        
+        # Generate explanations
+        try:
+            explanation_data = predictor.explain_project(df, project_id)
+            
+            if not explanation_data['success']:
+                return jsonify({
+                    'error': explanation_data['error'],
+                    'project_id': project_id
+                }), 400
+            
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Generated explanations for {explanation_data['sample_size']} samples")
+            
+            return jsonify(explanation_data)
+            
+        except Exception as e:
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Explanation error: {e}")
+                import traceback
+                traceback.print_exc()
+            return jsonify({'error': f'Failed to generate explanations: {str(e)}'}), 500
+            
+    except Exception as e:
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN][ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+        return jsonify({'error': f'Error processing explanation request: {str(e)}'}), 500
+
+@app.route('/api/explain/projects/<filename>', methods=['GET'])
+def get_explainable_projects(filename):
+    """Get list of projects that have trained models and exist in the current dataset."""
+    try:
+        # Try processed file first
+        processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
+        processed_path = UPLOADS_DIR / processed_filename
+        
+        if processed_path.exists():
+            upload_path = processed_path
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Using processed file for project list: {upload_path}")
+        else:
+            upload_path = UPLOADS_DIR / filename
+            if DEBUG_PRINTS:
+                print(f"[EXPLAIN] Using original file for project list: {upload_path}")
+        
+        if not upload_path.exists():
+            return jsonify({'error': f'File {filename} not found'}), 404
+        
+        # Get available models from predictor
+        available_models = list(predictor.models.keys())
+        
+        # Read the file to check which projects exist in the data
+        if str(upload_path).endswith('.csv'):
+            df = pd.read_csv(upload_path, low_memory=False)
+        else:
+            df = pd.read_excel(upload_path)
+        
+        projects_in_data = []
+        if 'projectid' in df.columns:
+            # Convert to consistent types for comparison
+            df['projectid'] = df['projectid'].astype(str)
+            projects_in_data = df['projectid'].unique().tolist()
+            # Convert back to int for model lookup
+            projects_in_data = [int(p) for p in projects_in_data if pd.notna(p) and p.isdigit()]
+        
+        # Check if predictions exist
+        prediction_cols = ['has_booked_prediction', 'has_booked', 'prediction', 'has_booked_pred']
+        has_predictions = any(col in df.columns for col in prediction_cols)
+        
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN] Available models: {available_models}")
+            print(f"[EXPLAIN] Projects in data: {projects_in_data}")
+            print(f"[EXPLAIN] Has predictions: {has_predictions}")
+        
+        # Find intersection of available models and projects in data
+        explainable_projects = []
+        for project_id in available_models:
+            if project_id in projects_in_data:
+                project_sample_count = len(df[df['projectid'] == str(project_id)])
+                explainable_projects.append({
+                    'project_id': project_id,
+                    'has_model': True,
+                    'in_current_data': True,
+                    'sample_count': project_sample_count
+                })
+        
+        return jsonify({
+            'explainable_projects': explainable_projects,
+            'has_predictions': has_predictions,
+            'total_available_models': len(available_models),
+            'total_projects_in_data': len(projects_in_data),
+            'prediction_columns_found': [col for col in prediction_cols if col in df.columns],
+            'using_processed_file': processed_path.exists()
+        })
+        
+    except Exception as e:
+        if DEBUG_PRINTS:
+            print(f"Error getting explainable projects: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

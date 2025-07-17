@@ -7,6 +7,7 @@ import sys
 import warnings
 from pathlib import Path
 import traceback
+from backend.model.explainability_utils import extract_feature_importance, calculate_conditional_analysis
 
 # Suppress FutureWarnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -175,3 +176,74 @@ class MLPredictor:
         
         data['prediction_confidence'] = confidences
         return data
+
+    def explain_project(self, data: pd.DataFrame, project_id: int) -> Dict[str, Any]:
+        """
+        Generate explainability analysis for a specific project using feature importance 
+        and conditional analysis.
+        
+        Args:
+            data: DataFrame with predictions (should contain prediction column)
+            project_id: Project ID to analyze
+        
+        Returns:
+            Dictionary with explainability results
+        """
+        try:
+            # Validate project_id
+            if project_id not in self.models:
+                available_projects = list(self.models.keys())
+                return {
+                    'success': False,
+                    'error': f"No model available for project {project_id}. Available projects: {available_projects}",
+                    'project_id': project_id
+                }
+            
+            # Convert project_id types for consistent filtering
+            data_copy = data.copy()
+            data_copy['projectid'] = data_copy['projectid'].astype(str)
+            project_id_str = str(project_id)
+            
+            # Filter data for this project
+            project_mask = data_copy["projectid"] == project_id_str
+            project_data = data_copy.loc[project_mask].copy()
+            
+            if project_data.empty:
+                return {
+                    'success': False,
+                    'error': f"No data rows found for project {project_id}. Available projects in data: {data_copy['projectid'].unique().tolist()}",
+                    'project_id': project_id
+                }
+            
+            if DEBUG_PRINTS:
+                print(f"Explaining project {project_id} with {len(project_data)} rows")
+                print(f"Available columns: {list(project_data.columns)}")
+            
+            explanation_result = {
+                'success': True,
+                'project_id': project_id,
+                'sample_size': len(project_data)
+            }
+            
+            # 1. Feature Importance Analysis
+            model_data = self.models[project_id]
+            feature_importance_result = extract_feature_importance(model_data, project_id)
+            explanation_result['feature_importance'] = feature_importance_result
+            
+            # 2. Conditional Dataset Analysis
+            conditional_analysis_result = calculate_conditional_analysis(project_data, project_id)
+            explanation_result['conditional_analysis'] = conditional_analysis_result
+            
+            return explanation_result
+            
+        except Exception as e:
+            if DEBUG_PRINTS:
+                print(f"Error in explain_project for project {project_id}: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            return {
+                'success': False,
+                'error': str(e),
+                'project_id': project_id
+            }

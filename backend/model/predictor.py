@@ -8,16 +8,26 @@ import warnings
 from pathlib import Path
 import traceback
 
-# Suppress ALL sklearn warnings more aggressively
+# Suppress ALL warnings more aggressively
+warnings.filterwarnings('ignore')
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 warnings.filterwarnings('ignore', message='.*version.*when using version.*')
 warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
 warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+warnings.simplefilter(action='ignore', category=DeprecationWarning)
 
 # Also suppress at the system level
 import logging
 logging.getLogger('sklearn').setLevel(logging.ERROR)
+logging.getLogger('pandas').setLevel(logging.ERROR)
+logging.getLogger('numpy').setLevel(logging.ERROR)
+
+# Set environment variables to suppress warnings
+os.environ['PYTHONWARNINGS'] = 'ignore'
 
 # Debug configuration
 DEBUG_PRINTS = False

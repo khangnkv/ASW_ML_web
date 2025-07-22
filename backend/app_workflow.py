@@ -10,6 +10,16 @@ import pandas as pd
 import sys
 import os
 import io
+
+# Suppress warnings globally
+warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
+warnings.filterwarnings('ignore', message='.*version.*when using version.*')
+warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+os.environ['PYTHONWARNINGS'] = 'ignore'
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.model.predictor import MLPredictor
 from preprocessing import preprocess_data, get_raw_preview

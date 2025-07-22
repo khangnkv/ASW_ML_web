@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import numpy as np
 import pandas as pd
 import sys
 import os

@@ -2,8 +2,10 @@ import uuid
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+import warnings
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import numpy as np
 import pandas as pd
 import sys
 import os
@@ -58,11 +60,35 @@ def sanitize_records(records):
         return val
     return [{k: safe(v) for k, v in row.items()} for row in records]
 
-# Health check endpoint
+# Health check endpoint with more detailed diagnostics
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'Backend is running'})
+    """Enhanced health check endpoint"""
+    try:
+        health_status = {
+            'status': 'healthy',
+            'message': 'Backend is running',
+            'timestamp': datetime.now().isoformat(),
+            'models_loaded': len(predictor.models),
+            'available_models': list(predictor.models.keys()) if hasattr(predictor, 'models') else [],
+            'uploads_dir_exists': UPLOADS_DIR.exists(),
+            'predictor_initialized': predictor is not None
+        }
+        
+        # Test basic predictor functionality
+        if hasattr(predictor, 'models') and len(predictor.models) > 0:
+            health_status['model_status'] = 'ready'
+        else:
+            health_status['model_status'] = 'no_models_loaded'
+            health_status['status'] = 'degraded'
+        
+        return jsonify(health_status)
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'message': f'Health check failed: {str(e)}',
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 # Models endpoint
 @app.route('/api/models', methods=['GET'])
@@ -241,7 +267,7 @@ def upload_uuid():
 
         # Read file into DataFrame
         if ext == 'csv':
-            df = pd.read_csv(file)
+            df = pd.read_csv(file) # type: ignore
         else:
             df = pd.read_excel(file)
 
@@ -313,16 +339,21 @@ def predict_workflow():
         if DEBUG_PRINTS:
             print(f"[PREDICT] Processing file: {upload_path}")
         
-        # 1. Read raw data
-        if filename.endswith('.csv'):
-            raw_df = pd.read_csv(upload_path)
-        else:
-            raw_df = pd.read_excel(upload_path)
+        # 1. Read raw data with error handling
+        try:
+            if filename.endswith('.csv'):
+                raw_df = pd.read_csv(upload_path, low_memory=False)
+            else:
+                raw_df = pd.read_excel(upload_path)
+            
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Raw data shape: {raw_df.shape}")
+        except Exception as e:
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Error reading file: {e}")
+            return jsonify({'error': f'Error reading file: {str(e)}'}), 500
         
-        if DEBUG_PRINTS:
-            print(f"[PREDICT] Raw data shape: {raw_df.shape}")
-        
-        # 2. Preprocessing
+        # 2. Preprocessing with enhanced error handling
         try:
             processed_df = preprocess_data(str(upload_path))
             if not isinstance(processed_df, pd.DataFrame):
@@ -332,21 +363,27 @@ def predict_workflow():
         except Exception as e:
             if DEBUG_PRINTS:
                 print(f"[PREDICT] Preprocessing error: {e}")
+                import traceback
+                traceback.print_exc()
             return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
         
-        # 3. Generate predictions using the main predict method
+        # 3. Check if predictor has models
+        if not hasattr(predictor, 'models') or len(predictor.models) == 0:
+            return jsonify({'error': 'No ML models available for prediction'}), 500
+        
+        # 4. Generate predictions with enhanced error handling
         try:
-            # Use the main predict method which handles all projects at once
-            result_df = predictor.predict(processed_df, log_progress=True)
-            
-            # Add confidence scores
-            result_df = predictor.add_prediction_confidence(result_df)
+            # Suppress warnings during prediction
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                result_df = predictor.predict(processed_df, log_progress=True)
+                result_df = predictor.add_prediction_confidence(result_df)
             
             if DEBUG_PRINTS:
                 print(f"[PREDICT] Result data shape: {result_df.shape}")
                 print(f"[PREDICT] Result columns: {list(result_df.columns)}")
             
-            # 4. Save the PROCESSED data with predictions (not raw data)
+            # 5. Save the PROCESSED data with predictions (for analysis)
             processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
             processed_path = UPLOADS_DIR / processed_filename
             result_df.to_csv(processed_path, index=False)
@@ -354,63 +391,82 @@ def predict_workflow():
             if DEBUG_PRINTS:
                 print(f"[PREDICT] Saved processed data with predictions to: {processed_path}")
             
-            # 5. Merge predictions back to raw data for frontend display
-            # Create a mapping of predictions by projectid
-            prediction_mapping = {}
-            for idx, row in result_df.iterrows():
-                project_id = row['projectid']
-                if project_id not in prediction_mapping:
-                    prediction_mapping[project_id] = []
-                prediction_mapping[project_id].append({
-                    'has_booked_prediction': row.get('has_booked_prediction', np.nan),
-                    'prediction_confidence': row.get('prediction_confidence', 0.5),
-                    'row_index': idx
-                })
+            # 6. Create prediction_results directory
+            prediction_results_dir = UPLOADS_DIR / "prediction_results"
+            prediction_results_dir.mkdir(exist_ok=True)
             
-            # Add predictions to raw data for frontend display
+            # 7. IMPROVED: Map predictions back to raw data for frontend display
             raw_with_predictions = raw_df.copy()
             raw_with_predictions['has_booked_prediction'] = np.nan
             raw_with_predictions['prediction_confidence'] = 0.5
             
-            # Map predictions back to raw data rows
-            for idx, row in raw_with_predictions.iterrows():
-                project_id = row['projectid']
-                if project_id in prediction_mapping and prediction_mapping[project_id]:
-                    # Take the first available prediction for this project
-                    pred_data = prediction_mapping[project_id].pop(0)
-                    raw_with_predictions.loc[idx, 'has_booked_prediction'] = pred_data['has_booked_prediction']
-                    raw_with_predictions.loc[idx, 'prediction_confidence'] = pred_data['prediction_confidence']
+            # Create prediction mapping by projectid
+            if 'projectid' in raw_df.columns and 'projectid' in result_df.columns:
+                prediction_dict = {}
+                
+                for _, row in result_df.iterrows():
+                    project_id = row['projectid']
+                    prediction = row.get('has_booked_prediction', np.nan)
+                    confidence = row.get('prediction_confidence', 0.5)
+                    
+                    if project_id not in prediction_dict:
+                        prediction_dict[project_id] = []
+                    
+                    prediction_dict[project_id].append({
+                        'prediction': prediction,
+                        'confidence': confidence
+                    })
+                
+                # Map predictions to raw data
+                for idx, row in raw_with_predictions.iterrows():
+                    project_id = row['projectid']
+                    
+                    if project_id in prediction_dict and prediction_dict[project_id]:
+                        # Take the first available prediction for this project
+                        pred_data = prediction_dict[project_id].pop(0)
+                        raw_with_predictions.at[idx, 'has_booked_prediction'] = pred_data['prediction']
+                        raw_with_predictions.at[idx, 'prediction_confidence'] = pred_data['confidence']
+                
+                if DEBUG_PRINTS:
+                    print(f"[PREDICT] Mapped predictions to {len(raw_with_predictions)} raw rows")
+                    print(f"[PREDICT] Predictions mapped: {raw_with_predictions['has_booked_prediction'].notna().sum()}")
             
-            # Save raw data with predictions for frontend
-            raw_with_pred_filename = filename  # Overwrite original file
-            raw_with_pred_path = UPLOADS_DIR / raw_with_pred_filename
-            raw_with_predictions.to_csv(raw_with_pred_path, index=False)
+            # 8. Save prediction results (raw + predictions) to separate folder
+            prediction_results_filename = filename.replace('.csv', '_prediction_results.csv')
+            prediction_results_path = prediction_results_dir / prediction_results_filename
+            raw_with_predictions.to_csv(prediction_results_path, index=False)
             
-            # Extract predictions from the result
+            if DEBUG_PRINTS:
+                print(f"[PREDICT] Saved prediction results to: {prediction_results_path}")
+            
+            # 9. Extract predictions summary for response
             predictions_list = []
             prediction_counts = {'likely': 0, 'unlikely': 0}
             
-            if 'has_booked_prediction' in result_df.columns:
-                for idx, row in result_df.iterrows():
-                    pred_value = row['has_booked_prediction']
-                    confidence = row.get('prediction_confidence', 0.95)
-                    if not pd.isna(pred_value):
-                        predictions_list.append({
-                            'projectid': int(row['projectid']),
-                            'row_index': idx,
-                            'prediction': float(pred_value),
-                            'confidence': float(confidence)
-                        })
-                        # Count predictions
-                        if pred_value >= 0.5:
-                            prediction_counts['likely'] += 1
-                        else:
-                            prediction_counts['unlikely'] += 1
+            for idx, row in raw_with_predictions.iterrows():
+                pred_value = row.get('has_booked_prediction')
+                confidence = row.get('prediction_confidence', 0.5)
+                project_id = row.get('projectid')
+                
+                if not pd.isna(pred_value) and not pd.isna(project_id):
+                    predictions_list.append({
+                        'projectid': int(project_id),
+                        'row_index': int(idx), # type: ignore
+                        'prediction': float(pred_value),
+                        'confidence': float(confidence)
+                    })
+                    
+                    # Count predictions
+                    if pred_value >= 0.5:
+                        prediction_counts['likely'] += 1
+                    else:
+                        prediction_counts['unlikely'] += 1
             
             if DEBUG_PRINTS:
-                print(f"[PREDICT] Generated {len(predictions_list)} predictions")
+                print(f"[PREDICT] Generated {len(predictions_list)} predictions for frontend")
+                print(f"[PREDICT] Prediction counts: {prediction_counts}")
             
-            # Return the raw dataset with predictions for the frontend table
+            # 10. Return the raw dataset with predictions
             complete_dataset = sanitize_records(raw_with_predictions.to_dict(orient='records'))
             
             response_data = {
@@ -419,11 +475,14 @@ def predict_workflow():
                 'raw_preview': sanitize_records(raw_df.head(5).to_dict(orient='records')),
                 'processed_preview': sanitize_records(processed_df.head(5).to_dict(orient='records')),
                 'prediction_counts': prediction_counts,
-                'processed_filename': processed_filename,  # Add this for explainability
+                'processed_filename': processed_filename,
+                'prediction_results_filename': prediction_results_filename,
+                'prediction_results_path': str(prediction_results_path),
                 'summary': {
-                    'total_rows': len(processed_df),
+                    'total_rows': len(raw_df),
                     'projects_processed': len(processed_df['projectid'].unique()) if 'projectid' in processed_df.columns else 0,
-                    'predictions_generated': len(predictions_list)
+                    'predictions_generated': len(predictions_list),
+                    'prediction_results_saved': True
                 }
             }
             
@@ -442,168 +501,6 @@ def predict_workflow():
             import traceback
             traceback.print_exc()
         return jsonify({'error': f'Error processing request: {str(e)}'}), 500
-
-# Explainability endpoints
-@app.route('/api/explain/<int:project_id>/<filename>', methods=['POST'])
-def explain_predictions(project_id, filename):
-    """Generate explainability analysis for a specific project."""
-    if DEBUG_PRINTS:
-        print(f"[EXPLAIN] /api/explain/{project_id}/{filename} endpoint called")
-    
-    try:
-        # First try to find the processed file
-        processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
-        processed_path = UPLOADS_DIR / processed_filename
-        
-        # If processed file exists, use it; otherwise fall back to original
-        if processed_path.exists():
-            upload_path = processed_path
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Using processed file: {upload_path}")
-        else:
-            upload_path = UPLOADS_DIR / filename
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Using original file: {upload_path}")
-        
-        if not upload_path.exists():
-            return jsonify({'error': f'File {filename} not found'}), 404
-        
-        if DEBUG_PRINTS:
-            print(f"[EXPLAIN] Processing project {project_id}")
-        
-        # Read the file with predictions
-        if str(upload_path).endswith('.csv'):
-            df = pd.read_csv(upload_path, low_memory=False)  # Add low_memory=False
-        else:
-            df = pd.read_excel(upload_path)
-        
-        if DEBUG_PRINTS:
-            print(f"[EXPLAIN] Loaded file with columns: {list(df.columns)}")
-            print(f"[EXPLAIN] Data shape: {df.shape}")
-        
-        # Check if predictions exist (check multiple possible column names)
-        prediction_cols = ['has_booked_prediction', 'has_booked', 'prediction', 'has_booked_pred']
-        has_predictions = any(col in df.columns for col in prediction_cols)
-        
-        if not has_predictions:
-            return jsonify({
-                'error': f'No predictions found. Available columns: {list(df.columns)}. Expected one of: {prediction_cols}'
-            }), 400
-        
-        # Convert project_id to match data types
-        if 'projectid' in df.columns:
-            # Ensure projectid column is consistent type
-            df['projectid'] = df['projectid'].astype(str)
-            project_id_str = str(project_id)
-            
-            # Check if this project exists in the data
-            project_exists = project_id_str in df['projectid'].unique()
-            if not project_exists:
-                available_projects = df['projectid'].unique().tolist()
-                return jsonify({
-                    'error': f'Project {project_id} not found in data. Available projects: {available_projects}'
-                }), 400
-        
-        # Generate explanations
-        try:
-            explanation_data = predictor.explain_project(df, project_id)
-            
-            if not explanation_data['success']:
-                return jsonify({
-                    'error': explanation_data['error'],
-                    'project_id': project_id
-                }), 400
-            
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Generated explanations for {explanation_data['sample_size']} samples")
-            
-            return jsonify(explanation_data)
-            
-        except Exception as e:
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Explanation error: {e}")
-                import traceback
-                traceback.print_exc()
-            return jsonify({'error': f'Failed to generate explanations: {str(e)}'}), 500
-            
-    except Exception as e:
-        if DEBUG_PRINTS:
-            print(f"[EXPLAIN][ERROR] {e}")
-            import traceback
-            traceback.print_exc()
-        return jsonify({'error': f'Error processing explanation request: {str(e)}'}), 500
-
-@app.route('/api/explain/projects/<filename>', methods=['GET'])
-def get_explainable_projects(filename):
-    """Get list of projects that have trained models and exist in the current dataset."""
-    try:
-        # Try processed file first
-        processed_filename = filename.replace('.csv', '_processed_with_predictions.csv')
-        processed_path = UPLOADS_DIR / processed_filename
-        
-        if processed_path.exists():
-            upload_path = processed_path
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Using processed file for project list: {upload_path}")
-        else:
-            upload_path = UPLOADS_DIR / filename
-            if DEBUG_PRINTS:
-                print(f"[EXPLAIN] Using original file for project list: {upload_path}")
-        
-        if not upload_path.exists():
-            return jsonify({'error': f'File {filename} not found'}), 404
-        
-        # Get available models from predictor
-        available_models = list(predictor.models.keys())
-        
-        # Read the file to check which projects exist in the data
-        if str(upload_path).endswith('.csv'):
-            df = pd.read_csv(upload_path, low_memory=False)
-        else:
-            df = pd.read_excel(upload_path)
-        
-        projects_in_data = []
-        if 'projectid' in df.columns:
-            # Convert to consistent types for comparison
-            df['projectid'] = df['projectid'].astype(str)
-            projects_in_data = df['projectid'].unique().tolist()
-            # Convert back to int for model lookup
-            projects_in_data = [int(p) for p in projects_in_data if pd.notna(p) and p.isdigit()]
-        
-        # Check if predictions exist
-        prediction_cols = ['has_booked_prediction', 'has_booked', 'prediction', 'has_booked_pred']
-        has_predictions = any(col in df.columns for col in prediction_cols)
-        
-        if DEBUG_PRINTS:
-            print(f"[EXPLAIN] Available models: {available_models}")
-            print(f"[EXPLAIN] Projects in data: {projects_in_data}")
-            print(f"[EXPLAIN] Has predictions: {has_predictions}")
-        
-        # Find intersection of available models and projects in data
-        explainable_projects = []
-        for project_id in available_models:
-            if project_id in projects_in_data:
-                project_sample_count = len(df[df['projectid'] == str(project_id)])
-                explainable_projects.append({
-                    'project_id': project_id,
-                    'has_model': True,
-                    'in_current_data': True,
-                    'sample_count': project_sample_count
-                })
-        
-        return jsonify({
-            'explainable_projects': explainable_projects,
-            'has_predictions': has_predictions,
-            'total_available_models': len(available_models),
-            'total_projects_in_data': len(projects_in_data),
-            'prediction_columns_found': [col for col in prediction_cols if col in df.columns],
-            'using_processed_file': processed_path.exists()
-        })
-        
-    except Exception as e:
-        if DEBUG_PRINTS:
-            print(f"Error getting explainable projects: {e}")
-        return jsonify({'error': str(e)}), 500
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

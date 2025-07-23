@@ -36,6 +36,10 @@ RUN if [ -f ./notebooks/project_info/ProjectID_Detail.xlsx ]; then \
         echo "Warning: ProjectID_Detail.xlsx not found"; \
     fi
 
+# Add this line to create the directory structure and copy the file
+RUN mkdir -p /app/notebooks/project_info
+COPY notebooks/project_info/ProjectID_Detail.xlsx /app/notebooks/project_info/ || echo "ProjectID_Detail.xlsx not found, continuing without it"
+
 # Set working directory to backend
 WORKDIR /app/backend
 

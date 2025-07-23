@@ -10,6 +10,7 @@ import pandas as pd
 import sys
 import os
 import io
+import logging
 
 # Suppress warnings globally
 warnings.filterwarnings('ignore')
@@ -19,6 +20,9 @@ warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 os.environ['PYTHONWARNINGS'] = 'ignore'
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.model.predictor import MLPredictor
@@ -261,74 +265,120 @@ def export_results(format, filename):
 
 # Helper: Save uploaded file with UUID
 @app.route('/api/upload_uuid', methods=['POST'])
-def upload_uuid():
-    print("[UPLOAD] /api/upload_uuid endpoint called")
+def upload_file_uuid():
+    print(f"[UPLOAD] Request method: {request.method}")
+    print(f"[UPLOAD] Request files: {list(request.files.keys())}")
+    print(f"[UPLOAD] Request headers: {dict(request.headers)}")
+    
+    if DEBUG_PRINTS:
+        print("[UPLOAD] /api/upload_uuid endpoint called")
+    
     try:
         if 'file' not in request.files:
-            return jsonify({'error': 'No file part in the request'}), 400
+            return jsonify({'error': 'No file uploaded'}), 400
+        
         file = request.files['file']
-        print(f"[UPLOAD] Received file: {getattr(file, 'filename', None)}")
-        if not file or not file.filename:
-            return jsonify({'error': 'No selected file'}), 400
-
-        ext = file.filename.rsplit('.', 1)[-1].lower()
-        if ext not in ['csv', 'xlsx', 'xls']:
-            return jsonify({'error': 'Unsupported file type'}), 400
-
-        # Read file into DataFrame
-        if ext == 'csv':
-            df = pd.read_csv(file) # type: ignore
-        else:
-            df = pd.read_excel(file)
-
-        # Ensure 'projectid' column exists
-        if 'projectid' not in df.columns:
-            # Try to auto-rename common alternatives
-            if 'Project ID' in df.columns:
-                df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if DEBUG_PRINTS:
+            print(f"[UPLOAD] Received file: {file.filename}")
+        
+        # Generate UUID for the file
+        file_uuid = str(uuid.uuid4())
+        
+        # Save file with UUID name but preserve original extension for processing
+        original_filename = file.filename
+        file_extension = Path(original_filename).suffix.lower()
+        
+        # Always save as CSV for consistency, but read original format first
+        temp_filename = f"{file_uuid}{file_extension}"
+        temp_path = UPLOADS_DIR / temp_filename
+        file.save(temp_path)
+        
+        if DEBUG_PRINTS:
+            print(f"[UPLOAD] Temporary file saved to: {temp_path}")
+        
+        # Read the file based on its extension
+        try:
+            if file_extension == '.csv':
+                df = pd.read_csv(temp_path, low_memory=False)
+            elif file_extension in ['.xlsx', '.xls']:
+                df = pd.read_excel(temp_path)
             else:
-                return jsonify({'error': "File must contain a 'projectid' column"}), 400
-
-        # Save file with UUID
-        uuid_name = f"{uuid.uuid4()}.csv"
-        save_path = UPLOADS_DIR / uuid_name
-        df.to_csv(save_path, index=False)
-        print(f"[UPLOAD] File saved to: {save_path.resolve()}")
-
-        # Sanitize for JSON serialization
-        def safe(val):
-            if pd.isna(val):
-                return ""
-            if isinstance(val, (pd.Timestamp, datetime)):
-                return str(val)
-            return val
-
-        preview = [{k: safe(v) for k, v in row.items()} for row in df.head(5).to_dict(orient='records')]
-        full_dataset = [{k: safe(v) for k, v in row.items()} for row in df.to_dict(orient='records')]
-
-        # File info for retention
-        now = datetime.utcnow()
-        retention_days = 90
+                return jsonify({'error': f'Unsupported file format: {file_extension}'}), 400
+            
+            # Convert to CSV for consistent processing
+            final_filename = f"{file_uuid}.csv"
+            final_path = UPLOADS_DIR / final_filename
+            df.to_csv(final_path, index=False)
+            
+            # Remove temporary file if it's different from final
+            if temp_path != final_path and temp_path.exists():
+                temp_path.unlink()
+            
+            if DEBUG_PRINTS:
+                print(f"[UPLOAD] File saved to: {final_path}")
+                print(f"[UPLOAD] Data shape: {df.shape}")
+                print(f"[UPLOAD] Columns: {list(df.columns)}")
+            
+        except Exception as e:
+            if DEBUG_PRINTS:
+                print(f"[UPLOAD] Error reading file: {e}")
+            # Clean up temporary file
+            if temp_path.exists():
+                temp_path.unlink()
+            return jsonify({'error': f'Error reading file: {str(e)}'}), 400
+        
+        # Validate required columns
+        if 'projectid' not in df.columns:
+            return jsonify({'error': 'File must contain a "projectid" column'}), 400
+        
+        # Create file info for tracking
         file_info = {
-            "filename": uuid_name,
-            "originalName": file.filename,
-            "upload_timestamp": now.isoformat(),
-            "deletion_date": (now + timedelta(days=retention_days)).isoformat(),
-            "status": "active"
+            'filename': final_filename,
+            'original_name': original_filename,
+            'uuid': file_uuid,
+            'upload_timestamp': datetime.now().isoformat(),
+            'deletion_date': (datetime.now() + timedelta(days=90)).isoformat(),
+            'status': 'uploaded',
+            'size_bytes': final_path.stat().st_size,
+            'rows': len(df),
+            'columns': len(df.columns)
         }
-
+        
+        # Generate preview data (first and last few rows)
+        preview_df = get_raw_preview(df, n=5)
+        preview_records = sanitize_preview(preview_df.to_dict(orient='records'))
+        
+        # Convert full dataset to records
+        full_dataset = sanitize_records(df.to_dict(orient='records'))
+        
+        # IMPORTANT: Return the exact structure the frontend expects
         response_data = {
-            "filename": uuid_name,
-            "preview": preview,
-            "full_dataset": full_dataset,
-            "file_info": file_info
+            'message': 'File uploaded successfully',
+            'filename': final_filename,
+            'original_name': original_filename,
+            'uuid': file_uuid,
+            'preview': preview_records,  # Frontend expects this
+            'full_dataset': full_dataset,  # Frontend expects this
+            'file_info': file_info,  # Frontend expects this
+            'success': True
         }
-
+        
+        if DEBUG_PRINTS:
+            print(f"[UPLOAD] Response structure: {list(response_data.keys())}")
+            print(f"[UPLOAD] Preview rows: {len(preview_records)}")
+            print(f"[UPLOAD] Full dataset rows: {len(full_dataset)}")
+        
         return jsonify(response_data)
         
     except Exception as e:
-        print(f"[UPLOAD][ERROR] {e}")
-        return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+        if DEBUG_PRINTS:
+            print(f"[UPLOAD] Upload error: {e}")
+            import traceback
+            traceback.print_exc()
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 # Main workflow endpoint
 @app.route('/api/predict_workflow', methods=['POST'])
@@ -410,37 +460,65 @@ def predict_workflow():
             raw_with_predictions['has_booked_prediction'] = np.nan
             raw_with_predictions['prediction_confidence'] = 0.5
             
-            # Create prediction mapping by projectid
+            # Create prediction mapping by projectid - IMPROVED LOGIC
             if 'projectid' in raw_df.columns and 'projectid' in result_df.columns:
-                prediction_dict = {}
+                if DEBUG_PRINTS:
+                    print(f"[PREDICT] Mapping predictions from processed data to raw data")
+                    print(f"[PREDICT] Raw data projects: {sorted(raw_df['projectid'].unique())}")
+                    print(f"[PREDICT] Processed data projects: {sorted(result_df['projectid'].unique())}")
                 
-                for _, row in result_df.iterrows():
+                # Create a more robust mapping using both index and projectid
+                prediction_map = {}
+                
+                # Build prediction dictionary from result_df
+                for idx, row in result_df.iterrows():
                     project_id = row['projectid']
                     prediction = row.get('has_booked_prediction', np.nan)
                     confidence = row.get('prediction_confidence', 0.5)
                     
-                    if project_id not in prediction_dict:
-                        prediction_dict[project_id] = []
+                    # Skip rows without valid predictions
+                    if pd.isna(prediction):
+                        continue
+                        
+                    # Create a key that can match back to raw data
+                    key = f"{project_id}"
                     
-                    prediction_dict[project_id].append({
+                    if key not in prediction_map:
+                        prediction_map[key] = []
+                        
+                    prediction_map[key].append({
                         'prediction': prediction,
-                        'confidence': confidence
+                        'confidence': confidence,
+                        'original_index': idx
                     })
                 
-                # Map predictions to raw data
+                if DEBUG_PRINTS:
+                    print(f"[PREDICT] Created prediction map with {len(prediction_map)} project groups")
+                    print(f"[PREDICT] Total predictions available: {sum(len(v) for v in prediction_map.values())}")
+                
+                # Map predictions back to raw data
+                mapped_count = 0
                 for idx, row in raw_with_predictions.iterrows():
                     project_id = row['projectid']
+                    key = f"{project_id}"
                     
-                    if project_id in prediction_dict and prediction_dict[project_id]:
+                    if key in prediction_map and prediction_map[key]:
                         # Take the first available prediction for this project
-                        pred_data = prediction_dict[project_id].pop(0)
+                        pred_data = prediction_map[key].pop(0)
                         raw_with_predictions.at[idx, 'has_booked_prediction'] = pred_data['prediction']
                         raw_with_predictions.at[idx, 'prediction_confidence'] = pred_data['confidence']
+                        mapped_count += 1
                 
                 if DEBUG_PRINTS:
-                    print(f"[PREDICT] Mapped predictions to {len(raw_with_predictions)} raw rows")
-                    print(f"[PREDICT] Predictions mapped: {raw_with_predictions['has_booked_prediction'].notna().sum()}")
-            
+                    print(f"[PREDICT] Successfully mapped {mapped_count} predictions to raw data")
+                    print(f"[PREDICT] Predictions with valid values: {raw_with_predictions['has_booked_prediction'].notna().sum()}")
+
+            else:
+                if DEBUG_PRINTS:
+                    print(f"[PREDICT] Warning: projectid column missing in raw or processed data")
+                    print(f"[PREDICT] Raw columns: {list(raw_df.columns)}")
+                    print(f"[PREDICT] Processed columns: {list(result_df.columns)}")
+        
             # 8. Save prediction results (raw + predictions) to separate folder
             prediction_results_filename = filename.replace('.csv', '_prediction_results.csv')
             prediction_results_path = prediction_results_dir / prediction_results_filename
@@ -554,6 +632,322 @@ def manual_cleanup():
         })
     except Exception as e:
         return jsonify({'error': f'Error during cleanup: {e}'}), 500
+
+@app.route('/api/explainability/<filename>/<int:project_id>', methods=['GET'])
+def get_explainability_analysis(filename, project_id):
+    """Get explainability analysis for a specific project from prediction results."""
+    if DEBUG_PRINTS:
+        print(f"[EXPLAIN] Explainability analysis requested for project {project_id} in file {filename}")
+    
+    try:
+        # Look for the prediction results file
+        prediction_results_dir = UPLOADS_DIR / "prediction_results"
+        if not filename.endswith('_prediction_results.csv'):
+            filename = filename.replace('.csv', '_prediction_results.csv')
+        
+        file_path = prediction_results_dir / filename
+        
+        if not file_path.exists():
+            return jsonify({'error': f'Prediction results file {filename} not found'}), 404
+        
+        # Read the prediction results
+        df = pd.read_csv(file_path, low_memory=False)
+        
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN] Loaded {len(df)} rows for analysis")
+        
+        # Filter data for the specific project
+        project_data = df[df['projectid'] == project_id].copy()
+        
+        if len(project_data) == 0:
+            return jsonify({'error': f'No data found for project {project_id}'}), 404
+        
+        # Check if we have predictions
+        if 'has_booked_prediction' not in project_data.columns:
+            return jsonify({'error': 'No prediction data available'}), 400
+        
+        # Analyze features by class (0 and 1)
+        feature_analysis = analyze_features_by_class(project_data, project_id)
+        
+        # Find ideal customers for both classes
+        ideal_customers = find_ideal_customers_by_class(project_data, feature_analysis, project_id)
+        
+        # Calculate class distribution
+        class_0_count = len(project_data[project_data['has_booked_prediction'] < 0.5])
+        class_1_count = len(project_data[project_data['has_booked_prediction'] >= 0.5])
+        
+        # Prepare response
+        response_data = {
+            'project_id': project_id,
+            'total_samples': len(project_data),
+            'class_distribution': {
+                'class_0': {
+                    'count': class_0_count,
+                    'percentage': round(class_0_count / len(project_data) * 100, 2) if len(project_data) > 0 else 0,
+                    'label': 'Not Potential Customers'
+                },
+                'class_1': {
+                    'count': class_1_count,
+                    'percentage': round(class_1_count / len(project_data) * 100, 2) if len(project_data) > 0 else 0,
+                    'label': 'Potential Customers'
+                }
+            },
+            'feature_analysis': feature_analysis,
+            'ideal_customers': ideal_customers,
+            'analysis_timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        if DEBUG_PRINTS:
+            print(f"[EXPLAIN] Error in explainability analysis: {e}")
+            import traceback
+            traceback.print_exc()
+        return jsonify({'error': f'Error in explainability analysis: {str(e)}'}), 500
+
+def analyze_features_by_class(project_data, project_id):
+    """Analyze top 5 most frequent values for each feature per class (0 and 1)."""
+    try:
+        # Exclude system columns
+        exclude_cols = {
+            'has_booked_prediction', 'prediction_confidence', 'customerid', 
+            'projectid', 'questiondate', 'questiontime', 'fillindate', 
+            'saledate', 'bookingdate', 'has_booked'
+        }
+        
+        # Separate data by prediction class
+        class_0_data = project_data[project_data['has_booked_prediction'] < 0.5].copy()
+        class_1_data = project_data[project_data['has_booked_prediction'] >= 0.5].copy()
+        
+        feature_analysis = {
+            'class_0': {},  # Not potential customers
+            'class_1': {}   # Potential customers
+        }
+        
+        for class_label, data in [('class_0', class_0_data), ('class_1', class_1_data)]:
+            if len(data) == 0:
+                continue
+                
+            for column in data.columns:
+                if column in exclude_cols:
+                    continue
+                
+                # Skip columns with too many unique values or too few
+                unique_count = data[column].nunique()
+                if unique_count > 50 or unique_count < 2:
+                    continue
+                
+                # Get top 5 most frequent values
+                value_counts = data[column].value_counts().head(5)
+                
+                if len(value_counts) > 0:
+                    feature_analysis[class_label][column] = {
+                        'top_values': [
+                            {
+                                'value': str(value),
+                                'count': int(count),
+                                'percentage': round(count / len(data) * 100, 1)
+                            }
+                            for value, count in value_counts.items()
+                        ],
+                        'total_unique': int(unique_count),
+                        'sample_size': len(data)
+                    }
+        
+        return feature_analysis
+        
+    except Exception as e:
+        print(f"Error analyzing features by class: {e}")
+        return {'class_0': {}, 'class_1': {}}
+
+def find_ideal_customers_by_class(project_data, feature_analysis, project_id):
+    """Find ideal customers for both classes based on top frequent features."""
+    try:
+        ideal_customers = {}
+        
+        # Separate data by prediction class
+        class_0_data = project_data[project_data['has_booked_prediction'] < 0.5].copy()
+        class_1_data = project_data[project_data['has_booked_prediction'] >= 0.5].copy()
+        
+        for class_label, data in [('class_0', class_0_data), ('class_1', class_1_data)]:
+            if len(data) == 0 or class_label not in feature_analysis or not feature_analysis[class_label]:
+                ideal_customers[class_label] = None
+                continue
+            
+            customer_scores = []
+            
+            for idx, row in data.iterrows():
+                score = 0
+                matched_features = []
+                total_features = 0
+                
+                for feature_name, feature_data in feature_analysis[class_label].items():
+                    if feature_name in row:
+                        total_features += 1
+                        top_value = feature_data['top_values'][0]['value']
+                        
+                        if str(row[feature_name]) == top_value:
+                            score += 1
+                            matched_features.append({
+                                'feature': feature_name,
+                                'value': str(row[feature_name]),
+                                'frequency_rank': 1
+                            })
+                        else:
+                            # Check if it matches any of the top 5 values
+                            for i, val_data in enumerate(feature_data['top_values']):
+                                if str(row[feature_name]) == val_data['value']:
+                                    score += (5 - i) / 5  # Weighted score
+                                    matched_features.append({
+                                        'feature': feature_name,
+                                        'value': str(row[feature_name]),
+                                        'frequency_rank': i + 1
+                                    })
+                                    break
+                
+                if total_features > 0:
+                    match_percentage = round(score / total_features * 100, 1)
+                    
+                    customer_scores.append({
+                        'customer_index': int(idx),
+                        'customer_id': str(row.get('customerid', 'Unknown')),
+                        'match_score': score,
+                        'match_percentage': match_percentage,
+                        'matched_features': matched_features,
+                        'total_features_checked': total_features,
+                        'prediction_confidence': float(row.get('prediction_confidence', 0.5)),
+                        'prediction_value': float(row.get('has_booked_prediction', 0.0)),
+                        'customer_data': {k: str(v) for k, v in row.items() if k not in {'has_booked_prediction', 'prediction_confidence'}}
+                    })
+            
+            # Sort by match percentage, then by prediction confidence
+            customer_scores.sort(
+                key=lambda x: (x['match_percentage'], x['prediction_confidence']),
+                reverse=True
+            )
+            
+            # Return the most ideal customer for this class
+            ideal_customers[class_label] = customer_scores[0] if customer_scores else None
+        
+        return ideal_customers
+        
+    except Exception as e:
+        print(f"Error finding ideal customers: {e}")
+        return {'class_0': None, 'class_1': None}
+
+# Add endpoint to get available projects for explainability
+@app.route('/api/explainability/<filename>/projects', methods=['GET'])
+def get_explainable_projects(filename):
+    """Get list of projects available for explainability analysis."""
+    try:
+        # Look for the prediction results file
+        prediction_results_dir = UPLOADS_DIR / "prediction_results"
+        if not filename.endswith('_prediction_results.csv'):
+            filename = filename.replace('.csv', '_prediction_results.csv')
+        
+        file_path = prediction_results_dir / filename
+        
+        if not file_path.exists():
+            return jsonify({'error': f'Prediction results file {filename} not found'}), 404
+        
+        # Read the prediction results
+        df = pd.read_csv(file_path, low_memory=False)
+        
+        # Get unique project IDs with their success counts
+        if 'has_booked_prediction' in df.columns:
+            project_stats = []
+            
+            for project_id in sorted(df['projectid'].unique()):
+                project_data = df[df['projectid'] == project_id]
+                success_cases = project_data[project_data['has_booked_prediction'] >= 0.5]
+                
+                project_stats.append({
+                    'project_id': int(project_id),
+                    'total_samples': len(project_data),
+                    'success_cases': len(success_cases),
+                    'success_rate': round(len(success_cases) / len(project_data) * 100, 1) if len(project_data) > 0 else 0
+                })
+            
+            return jsonify({
+                'available_projects': project_stats,
+                'total_projects': len(project_stats)
+            })
+        else:
+            return jsonify({'error': 'No prediction data available'}), 400
+            
+    except Exception as e:
+        if DEBUG_PRINTS:
+            print(f"Error getting explainable projects: {e}")
+        return jsonify({'error': f'Error getting projects: {str(e)}'}), 500
+
+@app.route('/api/prediction_results/<filename>', methods=['GET'])
+def get_prediction_results(filename):
+    """Load prediction results from the saved file."""
+    if DEBUG_PRINTS:
+        print(f"[RESULTS] Loading prediction results from: {filename}")
+    
+    try:
+        # Look for the file in prediction_results directory
+        prediction_results_dir = UPLOADS_DIR / "prediction_results"
+        file_path = prediction_results_dir / filename
+        
+        if not file_path.exists():
+            return jsonify({'error': f'Prediction results file {filename} not found'}), 404
+        
+        # Read the prediction results file
+        if filename.endswith('.csv'):
+            df = pd.read_csv(file_path, low_memory=False)
+        else:
+            df = pd.read_excel(file_path)
+        
+        if DEBUG_PRINTS:
+            print(f"[RESULTS] Loaded {len(df)} rows with {len(df.columns)} columns")
+            print(f"[RESULTS] Columns: {list(df.columns)}")
+        
+        # Convert to records and sanitize for JSON
+        complete_dataset = sanitize_records(df.to_dict(orient='records'))
+        
+        # Extract unique projects
+        projects = []
+        if 'projectid' in df.columns:
+            projects = sorted(df['projectid'].unique().tolist())
+        
+        # Calculate statistics
+        stats = {
+            'total_rows': len(df),
+            'total_columns': len(df.columns),
+            'unique_projects': len(projects),
+            'has_predictions': 'has_booked_prediction' in df.columns,
+            'predictions_count': len(df[df['has_booked_prediction'].notna()]) if 'has_booked_prediction' in df.columns else 0
+        }
+        
+        if 'has_booked_prediction' in df.columns:
+            # Calculate prediction distribution
+            prediction_counts = {
+                'likely': len(df[df['has_booked_prediction'] >= 0.5]),
+                'unlikely': len(df[df['has_booked_prediction'] < 0.5])
+            }
+            stats['prediction_distribution'] = prediction_counts
+        
+        response_data = {
+            'success': True,
+            'complete_dataset': complete_dataset,
+            'available_projects': projects,
+            'stats': stats,
+            'filename': filename,
+            'columns': list(df.columns)
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        if DEBUG_PRINTS:
+            print(f"[RESULTS] Error loading prediction results: {e}")
+            import traceback
+            traceback.print_exc()
+        return jsonify({'error': f'Error loading prediction results: {str(e)}'}), 500
+        
 
 if __name__ == '__main__':
     print("=" * 50)

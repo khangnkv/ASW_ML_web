@@ -41,6 +41,12 @@ function App() {
   // Prediction results state
   const [predictionResultsInfo, setPredictionResultsInfo] = useState(null);
 
+  // Add new state variables for explainability
+  const [explainabilityData, setExplainabilityData] = useState(null);
+  const [explainabilityLoading, setExplainabilityLoading] = useState(false);
+  const [showExplainability, setShowExplainability] = useState(false);
+  const [explainableProjects, setExplainableProjects] = useState([]);
+
   useEffect(() => {
     // Fetch available models on component mount
     fetchAvailableModels();
@@ -165,18 +171,43 @@ function App() {
 
       // Make the upload request
       const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      console.log('Uploading file to:', `${API_URL}/api/upload_uuid`);
+      
       const response = await axios.post(
         `${API_URL}/api/upload_uuid`,
         formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
+        { 
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 60000 // 60 second timeout
+        }
       );
 
-      console.log("UPLOAD RESPONSE:", response);
+      console.log("UPLOAD RESPONSE:", response.data);
+
+      // Check if response has the expected structure
+      if (!response.data) {
+        console.error('Empty response from server');
+        setError('Upload failed: Empty response from server.');
+        return;
+      }
 
       // Defensive: check if response contains expected fields
-      const { filename, preview, full_dataset, file_info } = response.data || {};
+      const { filename, preview, full_dataset, file_info, success } = response.data;
+      
+      if (!success) {
+        console.error('Upload not successful:', response.data);
+        setError(response.data.error || 'Upload failed: Server returned unsuccessful response.');
+        return;
+      }
+      
       if (!preview || !full_dataset) {
-        setError('Upload failed: Invalid response from server.');
+        console.error('Missing required data in response:', {
+          hasPreview: !!preview,
+          hasFullDataset: !!full_dataset,
+          hasFileInfo: !!file_info,
+          responseKeys: Object.keys(response.data)
+        });
+        setError('Upload failed: Missing preview or dataset in server response.');
         return;
       }
 
@@ -188,16 +219,32 @@ function App() {
       setAvailableProjects(projects);
       setFileInfo(file_info);
 
-      console.log('Uploaded fileData:', {
+      console.log('Upload successful:', {
         filename,
         previewRows: preview.length,
         fullDatasetRows: full_dataset.length,
         originalName: file.name,
         fileInfo: file_info,
         availableProjects: projects,
-      });
+    });
+    
     } catch (error) {
-      setError(error.response?.data?.error || error.message || 'Error uploading file');
+      console.error('Upload error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        headers: error.response?.headers
+      });
+      
+      if (error.code === 'ECONNABORTED') {
+        setError('Upload timeout: File too large or connection slow. Please try again.');
+      } else if (error.response?.data?.error) {
+        setError(`Upload failed: ${error.response.data.error}`);
+      } else if (error.response?.status) {
+        setError(`Upload failed: Server error (${error.response.status})`);
+      } else {
+        setError(`Upload failed: ${error.message || 'Unknown error'}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -262,9 +309,9 @@ function App() {
       const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await axios.get(`${API_URL}/api/prediction_results/${filename}`);
       
-      console.log('Loaded prediction results:', response.data);
+      console.log('Loaded prediction results response:', response.data);
       
-      if (response.data.success) {
+      if (response.data.success && response.data.complete_dataset) {
         // Update the full dataset with data from the saved file
         setFullDataset(response.data.complete_dataset);
         
@@ -275,14 +322,19 @@ function App() {
         // Extract available projects from the loaded data
         if (response.data.available_projects) {
           setAvailableProjects(response.data.available_projects);
+        } else {
+          // Fallback: extract projects from dataset
+          const projects = extractProjects(response.data.complete_dataset);
+          setAvailableProjects(projects);
         }
         
         // Hide data preview, only show prediction results
         setShowPreview(false);
         
-        console.log(`Loaded prediction results: ${response.data.stats.total_rows} rows, ${response.data.stats.unique_projects} projects`);
+        console.log(`Loaded prediction results successfully: ${response.data.stats.total_rows} rows, ${response.data.stats.unique_projects} projects`);
       } else {
         setError('Failed to load prediction results from saved file');
+        console.error('Invalid response structure:', response.data);
       }
       
     } catch (error) {
@@ -471,6 +523,49 @@ function App() {
     }
   };
 
+  // Add function to fetch explainable projects
+  const fetchExplainableProjects = async () => {
+    if (!fileInfo?.prediction_results_filename) return;
+    
+    try {
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.get(`${API_URL}/api/explainability/${fileInfo.prediction_results_filename}/projects`);
+      
+      setExplainableProjects(response.data.available_projects || []);
+    } catch (error) {
+      console.error('Error fetching explainable projects:', error);
+    }
+  };
+
+  // Add function to get explainability analysis
+  const getExplainabilityAnalysis = async (projectId) => {
+    if (!fileInfo?.prediction_results_filename) return;
+    
+    setExplainabilityLoading(true);
+    setError(null);
+    
+    try {
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+      const response = await axios.get(`${API_URL}/api/explainability/${fileInfo.prediction_results_filename}/${projectId}`);
+      
+      setExplainabilityData(response.data);
+      setShowExplainability(true);
+      console.log('Explainability analysis:', response.data);
+    } catch (error) {
+      console.error('Error getting explainability analysis:', error);
+      setError(`Failed to load explainability analysis: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setExplainabilityLoading(false);
+    }
+  };
+
+  // Add useEffect to fetch explainable projects when predictions are ready
+  useEffect(() => {
+    if (predictions && fileInfo?.prediction_results_filename) {
+      fetchExplainableProjects();
+    }
+  }, [predictions, fileInfo]);
+
   const cleanup = async () => {
     setFileData(null);
     setPredictions(null);
@@ -492,6 +587,12 @@ function App() {
     
     // Reset prediction results state
     setPredictionResultsInfo(null);
+    
+    // Reset explainability state
+    setExplainabilityData(null);
+    setExplainabilityLoading(false);
+    setShowExplainability(false);
+    setExplainableProjects([]);
   };
 
   const renderPreviewTable = (data, title) => {
@@ -797,9 +898,174 @@ function App() {
     </Modal>
   );
 
+  // Add explainability rendering function
+  const renderExplainabilitySection = () => {
+    if (!predictions || explainableProjects.length === 0) return null;
 
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <h5 className="mb-0">
+            <FiInfo className="me-2" />
+            Customer Analysis & Ideal Customer Insights
+          </h5>
+        </Card.Header>
+        <Card.Body>
+          <p className="text-muted mb-3">
+            Analyze customer patterns and find ideal customers for each class (Potential vs Non-Potential)
+          </p>
+          
+          <div className="d-flex flex-wrap gap-2 mb-3">
+            {explainableProjects.map(project => (
+              <Button
+                key={project.project_id}
+                variant="outline-info"
+                size="sm"
+                onClick={() => getExplainabilityAnalysis(project.project_id)}
+                disabled={explainabilityLoading}
+                className="d-flex align-items-center"
+              >
+                {explainabilityLoading ? (
+                  <Spinner animation="border" size="sm" className="me-2" />
+                ) : (
+                  <FiGrid className="me-2" />
+                )}
+                Project {project.project_id}
+                <Badge bg="success" className="ms-2">
+                  {project.success_cases} success
+                </Badge>
+              </Button>
+            ))}
+          </div>
+          
+          {showExplainability && explainabilityData && (
+            <Card className="mt-3">
+              <Card.Header className="d-flex justify-content-between align-items-center">
+                <h6 className="mb-0">
+                  Project {explainabilityData.project_id} Analysis
+                </h6>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={() => setShowExplainability(false)}
+                >
+                  Close
+                </Button>
+              </Card.Header>
+              <Card.Body>
+                {/* Class Distribution Summary */}
+                <Row className="mb-4">
+                  <Col md={6}>
+                    <div className="text-center">
+                      <div className="h4 text-primary">{explainabilityData.total_samples}</div>
+                      <small className="text-muted">Total Samples</small>
+                    </div>
+                  </Col>
+                  <Col md={3}>
+                    <div className="text-center">
+                      <div className="h4 text-success">{explainabilityData.class_distribution.class_1.count}</div>
+                      <small className="text-muted">Potential Customers ({explainabilityData.class_distribution.class_1.percentage}%)</small>
+                    </div>
+                  </Col>
+                  <Col md={3}>
+                    <div className="text-center">
+                      <div className="h4 text-danger">{explainabilityData.class_distribution.class_0.count}</div>
+                      <small className="text-muted">Non-Potential ({explainabilityData.class_distribution.class_0.percentage}%)</small>
+                    </div>
+                  </Col>
+                </Row>
 
-
+                {/* Analysis for Both Classes */}
+                {['class_1', 'class_0'].map(classKey => (
+                  <div key={classKey} className="mb-5">
+                    <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'} mb-3`}>
+                      {explainabilityData.class_distribution[classKey].label} - Top Features Analysis
+                    </h6>
+                    
+                    {explainabilityData.feature_analysis[classKey] && Object.keys(explainabilityData.feature_analysis[classKey]).length > 0 ? (
+                      <>
+                        {/* Top Features for this class */}
+                        {Object.entries(explainabilityData.feature_analysis[classKey]).slice(0, 5).map(([feature, data]) => (
+                          <Card key={feature} className="mb-3">
+                            <Card.Body>
+                              <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'}`}>{feature}</h6>
+                              <Row>
+                                {data.top_values.map((item, idx) => (
+                                  <Col md={2} key={idx} className="mb-2">
+                                    <div className="text-center">
+                                      <div className="fw-bold">{item.value}</div>
+                                      <div className="text-muted small">
+                                        {item.count} ({item.percentage}%)
+                                      </div>
+                                    </div>
+                                  </Col>
+                                ))}
+                              </Row>
+                            </Card.Body>
+                          </Card>
+                        ))}
+                        
+                        {/* Ideal Customer for this class */}
+                        {explainabilityData.ideal_customers[classKey] && (
+                          <>
+                            <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'} mb-3 mt-4`}>
+                              Most Ideal {explainabilityData.class_distribution[classKey].label} Profile
+                            </h6>
+                            <Card className={`border-${classKey === 'class_1' ? 'success' : 'danger'}`}>
+                              <Card.Body>
+                                <Row className="mb-3">
+                                  <Col md={3}>
+                                    <strong>Customer ID:</strong> {explainabilityData.ideal_customers[classKey].customer_id}
+                                  </Col>
+                                  <Col md={3}>
+                                    <strong>Match Score:</strong>{' '}
+                                    <Badge bg={classKey === 'class_1' ? 'success' : 'danger'}>
+                                      {explainabilityData.ideal_customers[classKey].match_percentage}%
+                                    </Badge>
+                                  </Col>
+                                  <Col md={3}>
+                                    <strong>Prediction:</strong>{' '}
+                                    {(explainabilityData.ideal_customers[classKey].prediction_value * 100).toFixed(1)}%
+                                  </Col>
+                                  <Col md={3}>
+                                    <strong>Features Matched:</strong>{' '}
+                                    {explainabilityData.ideal_customers[classKey].matched_features.length}/
+                                    {explainabilityData.ideal_customers[classKey].total_features_checked}
+                                  </Col>
+                                </Row>
+                                
+                                <h6 className="text-info mb-2">Matching Features:</h6>
+                                <Row>
+                                  {explainabilityData.ideal_customers[classKey].matched_features.map((feature, idx) => (
+                                    <Col md={4} key={idx} className="mb-2">
+                                      <div className="p-2 bg-light rounded">
+                                        <strong>{feature.feature}:</strong> {feature.value}
+                                        <Badge bg="info" size="sm" className="ms-2">
+                                          Rank #{feature.frequency_rank}
+                                        </Badge>
+                                      </div>
+                                    </Col>
+                                  ))}
+                                </Row>
+                              </Card.Body>
+                            </Card>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <Alert variant="warning">
+                        No sufficient data for {explainabilityData.class_distribution[classKey].label.toLowerCase()} analysis.
+                      </Alert>
+                    )}
+                  </div>
+                ))}
+              </Card.Body>
+            </Card>
+          )}
+        </Card.Body>
+      </Card>
+    );
+  };
 
   return (
     <Container fluid className="upload-container">
@@ -825,262 +1091,269 @@ function App() {
             </Alert>
           )}
 
-          {/* Regular content */}
-          <>
-            {!fileData && (
-              <Card>
-                <Card.Body>
-                  <div
-                    {...getRootProps()}
-                    className={`upload-area ${isDragActive ? 'dragover' : ''}`}
-                  >
-                    <input {...getInputProps()} />
-                    <FiUpload size={48} className="text-primary mb-3" />
-                    <h4>Drop your file here, or click to select</h4>
-                    <p className="text-muted" style={{ color: 'var(--bs.body-color)' }}>
-                      Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
-                    </p>
-                    <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
-                      File must contain a "projectid" column
-                    </p>
-                  </div>
-                </Card.Body>
-              </Card>
-            )}
-
-            {loading && (
-              <div className="loading-spinner">
-                <div className="text-center">
-                  <Spinner animation="border" role="status" className="mb-3">
-                    <span className="visually-hidden">Loading...</span>
-                  </Spinner>
-                  <p>Processing your file...</p>
+          {/* File Upload Section */}
+          {!fileData && (
+            <Card>
+              <Card.Body>
+                <div
+                  {...getRootProps()}
+                  className={`upload-area ${isDragActive ? 'dragover' : ''}`}
+                >
+                  <input {...getInputProps()} />
+                  <FiUpload size={48} className="text-primary mb-3" />
+                  <h4>Drop your file here, or click to select</h4>
+                  <p className="text-muted" style={{ color: 'var(--bs.body-color)' }}>
+                    Supports CSV and Excel files (max 100,000 rows) - Files are automatically converted to CSV for faster processing
+                  </p>
+                  <p className="text-muted small" style={{ color: 'var(--bs.body-color)' }}>
+                    File must contain a "projectid" column
+                  </p>
                 </div>
+              </Card.Body>
+            </Card>
+          )}
+
+          {/* Loading Spinner */}
+          {loading && (
+            <div className="loading-spinner">
+              <div className="text-center">
+                <Spinner animation="border" role="status" className="mb-3">
+                  <span className="visually-hidden">Loading...</span>
+                </Spinner>
+                <p>Processing your file...</p>
               </div>
-            )}
+            </div>
+          )}
 
-            {fileData && !loading && showPreview && (
-              <>
-                <Card className="mb-4">
-                  <Card.Header>
-                    <h5 className="mb-0">File Information</h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <Row>
-                      <Col md={6}>
-                        <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
-                      </Col>
-                      <Col md={6}>
-                        <Button
-                          variant="primary"
-                          onClick={generatePredictions}
-                          disabled={loading || !fileData}
-                          className="me-2"
-                        >
-                          <FiDatabase className="me-2" />
-                          Generate Predictions
-                        </Button>
-                        <Button variant="outline-secondary" onClick={cleanup}>
-                          Upload New File
-                        </Button>
-                      </Col>
-                    </Row>
-                  </Card.Body>
-                </Card>
-                
-                {/* Project Filters */}
-                <ProjectFilters
-                  projects={availableProjects}
-                  selectedProject={selectedProject}
-                  onSelect={handleProjectFilter}
-                  onReset={handleFilterReset}
-                  disabled={loading}
-                  className="mb-4"
-                />
-                
-                {/* Data Statistics */}
-                <DataStats
-                  data={currentData}
-                  title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
-                  className="mb-4"
-                />
-                
-                {renderPreviewControls()}
-                {/* Preview Table - Only shown when showPreview is true */}
-                {showPreview && (
-                  (!previewRows || previewRows.length === 0) ? (
-                    <Alert variant="warning">No preview data available for this file.</Alert>
-                  ) : (
-                    renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
-                  )
-                )}
-              </>
-            )}
-
-            {predictions && !loading && (
-              <>
-                <Card className="mb-4">
-                  <Card.Header>
-                    <h5 className="mb-0">Prediction Results Summary</h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <Row>
-                      <Col md={8}>
-                        <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
-                        <p><strong>Prediction Distribution:</strong> 
-                          {predictions.stats?.prediction_distribution ? 
-                            (predictions.stats.prediction_distribution['1'] > 0 ? 
-                              `${predictions.stats.prediction_distribution['1']} potential customers, ` : '') +
-                            (predictions.stats.prediction_distribution['0'] > 0 ? 
-                              `${predictions.stats.prediction_distribution['0']} not potential customers` : '')
-                            : '-'}
-                        </p>
-                      </Col>
-                      <Col md={4} className="d-flex align-items-center justify-content-end">
-                        <Button variant="outline-secondary" onClick={cleanup}>
-                          Upload New File
-                        </Button>
-                      </Col>
-                    </Row>
-                  </Card.Body>
-                </Card>
-                {/* --- New Prediction Statistics Card --- */}
-                {renderPredictionStats()}
-                {/* Project Filters for Prediction Results */}
-                <ProjectFilters
-                  projects={availableProjects}
-                  selectedProject={selectedProject}
-                  onSelect={handleProjectFilter}
-                  onReset={handleFilterReset}
-                  disabled={loading}
-                  className="mb-4"
-                />
-                
-                {/* Prediction Data Statistics */}
-                <DataStats
-                  data={currentData}
-                  title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
-                  className="mb-4"
-                />
-                
-                {renderPreviewControls()}
-                {/* Final Prediction Preview */}
-                <h4 className="mt-3 mb-3" style={{ color: '#0d6efd' }}>Final Prediction Preview: Prediction Results</h4>
-                {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
-                
-
-                <Card>
-                  <Card.Header>
-                    <h5 className="mb-0">
-                      <FiDownload className="me-2" />
-                      Export Results
-                    </h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <div className="d-flex flex-wrap gap-2">
+          {/* File Preview Section */}
+          {fileData && !loading && showPreview && (
+            <>
+              <Card className="mb-4">
+                <Card.Header>
+                  <h5 className="mb-0">File Information</h5>
+                </Card.Header>
+                <Card.Body>
+                  <Row>
+                    <Col md={6}>
+                      <p><strong>Filename:</strong> {fileData.originalName || fileData.filename}</p>
+                    </Col>
+                    <Col md={6}>
                       <Button
-                        variant="outline-primary"
-                        onClick={() => exportResults('csv')}
-                        disabled={exportLoading || loading}
-                        className="btn-export d-flex align-items-center"
+                        variant="primary"
+                        onClick={generatePredictions}
+                        disabled={loading || !fileData}
+                        className="me-2"
                       >
                         <FiDatabase className="me-2" />
-                        {exportLoading && exportFormat === 'CSV' ? (
-                          <>
-                            <Spinner
-                              as="span"
-                              animation="border"
-                              size="sm"
-                              role="status"
-                              aria-hidden="true"
-                              className="me-2"
-                            />
-                            Exporting...
-                          </>
-                        ) : (
-                          'Export as CSV'
-                        )}
+                        Generate Predictions
                       </Button>
-                      <Button
-                        variant="outline-success"
-                        onClick={() => exportResults('xlsx')}
-                        disabled={exportLoading || loading}
-                        className="btn-export d-flex align-items-center"
-                      >
-                        <FiGrid className="me-2" />
-                        {exportLoading && exportFormat === 'XLSX' ? (
-                          <>
-                            <Spinner
-                              as="span"
-                              animation="border"
-                              size="sm"
-                              role="status"
-                              aria-hidden="true"
-                              className="me-2"
-                            />
-                            Exporting...
-                          </>
-                        ) : (
-                          'Export as Excel'
-                        )}
+                      <Button variant="outline-secondary" onClick={cleanup}>
+                        Upload New File
                       </Button>
-                      <Button
-                        variant="outline-info"
-                        onClick={() => exportResults('json')}
-                        disabled={exportLoading || loading}
-                        className="btn-export d-flex align-items-center"
-                      >
-                        <FiCode className="me-2" />
-                        {exportLoading && exportFormat === 'JSON' ? (
-                          <>
-                            <Spinner
-                              as="span"
-                              animation="border"
-                              size="sm"
-                              role="status"
-                              aria-hidden="true"
-                              className="me-2"
-                            />
-                            Exporting...
-                          </>
-                        ) : (
-                          'Export as JSON'
-                        )}
+                    </Col>
+                  </Row>
+                </Card.Body>
+              </Card>
+              
+              {/* Project Filters */}
+              <ProjectFilters
+                projects={availableProjects}
+                selectedProject={selectedProject}
+                onSelect={handleProjectFilter}
+                onReset={handleFilterReset}
+                disabled={loading}
+                className="mb-4"
+              />
+              
+              {/* Data Statistics */}
+              <DataStats
+                data={currentData}
+                title={selectedProject ? `Project ${selectedProject} Statistics` : "Full Dataset Statistics"}
+                className="mb-4"
+              />
+              
+              {renderPreviewControls()}
+              {/* Preview Table */}
+              {showPreview && (
+                (!previewRows || previewRows.length === 0) ? (
+                  <Alert variant="warning">No preview data available for this file.</Alert>
+                ) : (
+                  renderPreviewTable(previewRows, `Data Preview ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)
+                )
+              )}
+            </>
+          )}
+
+          {/* Prediction Results Section */}
+          {predictions && !loading && (
+            <>
+              <Card className="mb-4">
+                <Card.Header>
+                  <h5 className="mb-0">Prediction Results Summary</h5>
+                </Card.Header>
+                <Card.Body>
+                  <Row>
+                    <Col md={8}>
+                      <p><strong>Rows Processed:</strong> {predictions.stats?.rows_processed ?? '-'}</p>
+                      <p><strong>Prediction Distribution:</strong> 
+                        {predictions.stats?.prediction_distribution ? 
+                          (predictions.stats.prediction_distribution['1'] > 0 ? 
+                            `${predictions.stats.prediction_distribution['1']} potential customers, ` : '') +
+                          (predictions.stats.prediction_distribution['0'] > 0 ? 
+                            `${predictions.stats.prediction_distribution['0']} not potential customers` : '')
+                        : '-'}
+                      </p>
+                    </Col>
+                    <Col md={4} className="d-flex align-items-center justify-content-end">
+                      <Button variant="outline-secondary" onClick={cleanup}>
+                        Upload New File
                       </Button>
+                    </Col>
+                  </Row>
+                </Card.Body>
+              </Card>
+
+              {/* Prediction Statistics */}
+              {renderPredictionStats()}
+
+              {/* Project Filters for Prediction Results */}
+              <ProjectFilters
+                projects={availableProjects}
+                selectedProject={selectedProject}
+                onSelect={handleProjectFilter}
+                onReset={handleFilterReset}
+                disabled={loading}
+                className="mb-4"
+              />
+              
+              {/* Prediction Data Statistics */}
+              <DataStats
+                data={currentData}
+                title={selectedProject ? `Project ${selectedProject} Prediction Statistics` : "Full Prediction Statistics"}
+                className="mb-4"
+              />
+              
+              {renderPreviewControls()}
+              
+              {/* Final Prediction Preview */}
+              <h4 className="mt-3 mb-3" style={{ color: '#0d6efd' }}>Final Prediction Preview: Prediction Results</h4>
+              {renderPreviewTable(previewRows, `Prediction Results ${selectedProject ? `(Project ${selectedProject})` : '(All Projects)'}`)}
+
+              {/* EXPLAINABILITY ANALYSIS SECTION - ADD THIS HERE */}
+              {renderExplainabilitySection()}
+
+              {/* Export Results */}
+              <Card>
+                <Card.Header>
+                  <h5 className="mb-0">
+                    <FiDownload className="me-2" />
+                    Export Results
+                  </h5>
+                </Card.Header>
+                <Card.Body>
+                  <div className="d-flex flex-wrap gap-2">
+                    <Button
+                      variant="outline-primary"
+                      onClick={() => exportResults('csv')}
+                      disabled={exportLoading || loading}
+                      className="btn-export d-flex align-items-center"
+                    >
+                      <FiDatabase className="me-2" />
+                      {exportLoading && exportFormat === 'CSV' ? (
+                        <>
+                          <Spinner
+                            as="span"
+                            animation="border"
+                            size="sm"
+                            role="status"
+                            aria-hidden="true"
+                            className="me-2"
+                          />
+                          Exporting...
+                        </>
+                      ) : (
+                        'Export as CSV'
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline-success"
+                      onClick={() => exportResults('xlsx')}
+                      disabled={exportLoading || loading}
+                      className="btn-export d-flex align-items-center"
+                    >
+                      <FiGrid className="me-2" />
+                      {exportLoading && exportFormat === 'XLSX' ? (
+                        <>
+                          <Spinner
+                            as="span"
+                            animation="border"
+                            size="sm"
+                            role="status"
+                            aria-hidden="true"
+                            className="me-2"
+                          />
+                          Exporting...
+                        </>
+                      ) : (
+                        'Export as Excel'
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline-info"
+                      onClick={() => exportResults('json')}
+                      disabled={exportLoading || loading}
+                      className="btn-export d-flex align-items-center"
+                    >
+                      <FiCode className="me-2" />
+                      {exportLoading && exportFormat === 'JSON' ? (
+                        <>
+                          <Spinner
+                            as="span"
+                            animation="border"
+                            size="sm"
+                            role="status"
+                            aria-hidden="true"
+                            className="me-2"
+                          />
+                          Exporting...
+                        </>
+                      ) : (
+                        'Export as JSON'
+                      )}
+                    </Button>
+                  </div>
+                  {exportLoading && (
+                    <div className="mt-3">
+                      <small className="text-muted">
+                        <FiClock className="me-1" />
+                        Export in progress... Please wait while we prepare your {exportFormat} file.
+                      </small>
                     </div>
-                    {exportLoading && (
-                      <div className="mt-3">
-                        <small className="text-muted">
-                          <FiClock className="me-1" />
-                          Export in progress... Please wait while we prepare your {exportFormat} file.
-                        </small>
-                      </div>
-                    )}
-                  </Card.Body>
-                </Card>
-                {/* Upload New File button at the bottom */}
-                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
-                  <Button
-                    variant="secondary"
-                    size="lg"
-                    onClick={cleanup}
-                    style={{ minWidth: 220, fontWeight: 600 }}
-                  >
-                    Upload New File
-                  </Button>
-                </div>
-              </>
-            )}
+                  )}
+                </Card.Body>
+              </Card>
 
-            {fileInfo && (
-              <>
-                {renderFileRetentionInfo()}
-                {renderStorageStats()}
-              </>
-            )}
+              {/* Upload New File button at the bottom */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1rem' }}>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  onClick={cleanup}
+                  style={{ minWidth: 220, fontWeight: 600 }}
+                >
+                  Upload New File
+                </Button>
+              </div>
+            </>
+          )}
 
-            {/* End of content */}
-          </>
+          {/* File Retention and Storage Info */}
+          {fileInfo && (
+            <>
+              {renderFileRetentionInfo()}
+              {renderStorageStats()}
+            </>
+          )}
         </Col>
       </Row>
       

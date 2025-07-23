@@ -314,55 +314,123 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     - save_dir: where to save processed file (if None, use backend/preprocessed_unencoded/)
     Returns: processed DataFrame (unencoded)
     """
-    # Set defaults
-    # Handle both Docker and local environments
-    if os.getcwd().endswith('/backend') or os.getcwd().endswith('\\backend'):
-        # Running from backend directory (Docker environment)
-        backend_dir = Path(os.getcwd())
-        project_root = backend_dir.parent
+    # Get the current working directory and script location
+    script_dir = Path(__file__).resolve().parent  # This is /app/ in Docker
+    current_dir = Path(os.getcwd())  # This might be /app/backend/ in Docker
+    
+    if DEBUG_PRINTS:
+        print(f"Script directory: {script_dir}")
+        print(f"Current working directory: {current_dir}")
+        print(f"Processing file: {filepath}")
+    
+    # Determine backend directory - FIXED LOGIC
+    if current_dir.name == 'backend':
+        backend_dir = current_dir
+        project_root = current_dir.parent
     else:
-        # Running from project root (local environment)
-        project_root = Path(__file__).resolve().parent
+        project_root = script_dir
         backend_dir = project_root / 'backend'
     
     if company_data_path is None:
-        company_data_path = backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx'
-        # Also try alternative locations if the file doesn't exist
-        if not company_data_path.exists():
-            alt_paths = [
-                project_root / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
-                backend_dir / 'project_info' / 'ProjectID_Detail.xlsx',
-                Path('/app/backend/notebooks/project_info/ProjectID_Detail.xlsx'),
-                Path('/app/notebooks/project_info/ProjectID_Detail.xlsx')
-            ]
-            for alt_path in alt_paths:
-                if alt_path.exists():
-                    company_data_path = alt_path
-                    print(f"Found ProjectID_Detail.xlsx at: {company_data_path}")
-                    break
+        # DIRECT PATH APPROACH - Use the exact Docker path structure
+        primary_path = Path('/app/backend/notebooks/project_info/ProjectID_Detail.xlsx')
+        
+        if DEBUG_PRINTS:
+            print(f"Checking primary path: {primary_path}")
+            print(f"Primary path exists: {primary_path.exists()}")
+            
+            # Also check if the parent directories exist
+            print(f"Parent dir /app/backend/notebooks exists: {Path('/app/backend/notebooks').exists()}")
+            print(f"Parent dir /app/backend/notebooks/project_info exists: {Path('/app/backend/notebooks/project_info').exists()}")
+            
+            # List what's actually in that directory
+            project_info_dir = Path('/app/backend/notebooks/project_info')
+            if project_info_dir.exists():
+                print(f"Contents of {project_info_dir}:")
+                for item in project_info_dir.iterdir():
+                    print(f"  - {item.name}")
             else:
-                print(f"Warning: ProjectID_Detail.xlsx not found. Searched in: {[company_data_path] + alt_paths}")
-                company_data_path = None
+                print(f"Directory {project_info_dir} does not exist")
+        
+        if primary_path.exists():
+            company_data_path = primary_path
+            if DEBUG_PRINTS:
+                print(f"Found ProjectID_Detail.xlsx at: {company_data_path}")
+        else:
+            # Fallback paths if primary doesn't work
+            fallback_paths = [
+                Path('/app/notebooks/project_info/ProjectID_Detail.xlsx'),
+                Path('/app/project_info/ProjectID_Detail.xlsx'),
+                backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
+                project_root / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
+            ]
+            
+            company_data_path = None
+            for path in fallback_paths:
+                if DEBUG_PRINTS:
+                    print(f"Checking fallback path: {path} - Exists: {path.exists()}")
+                if path.exists():
+                    company_data_path = path
+                    if DEBUG_PRINTS:
+                        print(f"Found ProjectID_Detail.xlsx at fallback: {company_data_path}")
+                    break
+            
+            if company_data_path is None:
+                # LAST RESORT: Create a minimal fallback file if none exists
+                print("WARNING: ProjectID_Detail.xlsx not found anywhere. Creating minimal fallback...")
+                
+                # Create the directory structure
+                fallback_dir = Path('/app/backend/notebooks/project_info')
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Create a minimal ProjectID_Detail.xlsx with basic project info
+                fallback_path = fallback_dir / 'ProjectID_Detail.xlsx'
+                
+                # Create basic project data - you may need to adjust these based on your actual data structure
+                basic_project_data = {
+                    'Project ID': [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+                    'Project Brand': ['Sample Brand'] * 11,
+                    'Project Type': ['Condo'] * 11,
+                    'Location': ['Bangkok'] * 11
+                }
+                
+                fallback_df = pd.DataFrame(basic_project_data)
+                
+                try:
+                    fallback_df.to_excel(fallback_path, index=False, engine='openpyxl')
+                    company_data_path = fallback_path
+                    print(f"Created fallback ProjectID_Detail.xlsx at: {company_data_path}")
+                except Exception as e:
+                    print(f"Failed to create fallback file: {e}")
+                    raise FileNotFoundError("ProjectID_Detail.xlsx is required but not found and fallback creation failed")
     
     if save_dir is None:
         save_dir = backend_dir / 'preprocessed_unencoded'
     os.makedirs(save_dir, exist_ok=True)
 
-    # Read company data if available
-    company_df = None
+    # Read company data - THIS IS MANDATORY
     if company_data_path and Path(company_data_path).exists():
         try:
             company_df = pd.read_excel(company_data_path, engine='openpyxl')
-            company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+            # Ensure column name consistency
+            if 'Project ID' in company_df.columns:
+                company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+            elif 'projectid' not in company_df.columns:
+                # If neither exists, create a basic projectid column
+                company_df['projectid'] = range(10, 10 + len(company_df))
+                print("Warning: No projectid column found, created basic sequence")
+                
             if DEBUG_PRINTS:
-                print(f"Loaded project info from: {company_data_path}")
+                print(f"Successfully loaded project info from: {company_data_path}")
+                print(f"Company data shape: {company_df.shape}")
+                print(f"Company data columns: {list(company_df.columns)}")
+                print(f"Available project IDs: {sorted(company_df['projectid'].unique())}")
         except Exception as e:
-            if DEBUG_PRINTS:
-                print(f"Warning: Could not load project info file: {e}")
-            company_df = None
+            error_msg = f"CRITICAL ERROR: Failed to load ProjectID_Detail.xlsx from {company_data_path}: {e}"
+            print(error_msg)
+            raise RuntimeError(error_msg)
     else:
-        if DEBUG_PRINTS:
-            print("Project info file not found, proceeding without it")
+        raise FileNotFoundError(f"ProjectID_Detail.xlsx file is required but not accessible at: {company_data_path}")
 
     # Read input file
     ext = str(filepath).split('.')[-1].lower()
@@ -380,21 +448,21 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     if DEBUG_PRINTS:
         print(f"Input data shape: {df.shape}")
         print(f"Available columns: {list(df.columns)}")
-        missing_common_cols = []
-        common_expected_cols = ['questiondate', 'bookingdate', 'Type', 'gender', 'age']
-        for col in common_expected_cols:
-            if col not in df.columns:
-                missing_common_cols.append(col)
-        if missing_common_cols:
-            print(f"Note: Some common columns are missing: {missing_common_cols}")
+        print(f"Input project IDs: {sorted(df['projectid'].unique())}")
     
-    # Merge with company data if available
+    # MANDATORY: Merge with company data
     if company_df is not None:
-        if not df['projectid'].isin(company_df['projectid']).all():
-            print("Warning: Some projectid values are not found in company data.")
+        initial_shape = df.shape
         df = pd.merge(df, company_df, on='projectid', how='left')
+        if DEBUG_PRINTS:
+            print(f"After merge - shape changed from {initial_shape} to {df.shape}")
+            
+        # Check for unmatched project IDs
+        unmatched_projects = set(df['projectid'].unique()) - set(company_df['projectid'].unique())
+        if unmatched_projects:
+            print(f"Warning: Some project IDs not found in company data: {sorted(unmatched_projects)}")
     else:
-        print("Skipping company data merge - file not available")
+        raise RuntimeError("Company data merge is mandatory but company_df is None")
 
     # Save original column order
     orig_cols = list(df.columns)

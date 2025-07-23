@@ -975,74 +975,95 @@ function App() {
                   </Col>
                 </Row>
 
-                {/* Analysis for Both Classes */}
+                {/* Analysis for Both Classes - Show ALL Features */}
                 {['class_1', 'class_0'].map(classKey => (
                   <div key={classKey} className="mb-5">
                     <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'} mb-3`}>
-                      {explainabilityData.class_distribution[classKey].label} - Top Features Analysis
+                      {explainabilityData.class_distribution[classKey].label} - Complete Features Analysis
                     </h6>
                     
                     {explainabilityData.feature_analysis[classKey] && Object.keys(explainabilityData.feature_analysis[classKey]).length > 0 ? (
                       <>
-                        {/* Top Features for this class */}
-                        {Object.entries(explainabilityData.feature_analysis[classKey]).slice(0, 5).map(([feature, data]) => (
-                          <Card key={feature} className="mb-3">
-                            <Card.Body>
-                              <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'}`}>{feature}</h6>
-                              <Row>
-                                {data.top_values.map((item, idx) => (
-                                  <Col md={2} key={idx} className="mb-2">
-                                    <div className="text-center">
-                                      <div className="fw-bold">{item.value}</div>
-                                      <div className="text-muted small">
-                                        {item.count} ({item.percentage}%)
+                        {/* Show ALL Features for this class */}
+                        <div className="row">
+                          {Object.entries(explainabilityData.feature_analysis[classKey]).map(([feature, data]) => (
+                            <div key={feature} className="col-md-6 mb-4">
+                              <Card className="h-100">
+                                <Card.Header className={`bg-${classKey === 'class_1' ? 'success' : 'danger'} text-white`}>
+                                  <h6 className="mb-0">{feature}</h6>
+                                  <small>({data.sample_size} samples, {data.total_unique} unique values)</small>
+                                </Card.Header>
+                                <Card.Body>
+                                  <div className="mb-2">
+                                    <strong>Top 5 Most Frequent Values:</strong>
+                                  </div>
+                                  {data.top_values.map((item, idx) => (
+                                    <div 
+                                      key={idx} 
+                                      className={`p-2 mb-2 rounded ${item.is_top_frequent ? 'bg-warning bg-opacity-25 border border-warning' : 'bg-light'}`}
+                                    >
+                                      <div className="d-flex justify-content-between align-items-center">
+                                        <div>
+                                          <strong className={item.is_top_frequent ? 'text-warning-emphasis' : ''}>
+                                            #{idx + 1}: {item.value}
+                                            {item.is_top_frequent && <span className="ms-2 badge bg-warning text-dark">Most Frequent</span>}
+                                          </strong>
+                                        </div>
+                                        <div className="text-end">
+                                          <div className="fw-bold">{item.count} times</div>
+                                          <div className="text-muted small">{item.percentage}%</div>
+                                        </div>
                                       </div>
                                     </div>
-                                  </Col>
-                                ))}
-                              </Row>
-                            </Card.Body>
-                          </Card>
-                        ))}
+                                  ))}
+                                </Card.Body>
+                              </Card>
+                            </div>
+                          ))}
+                        </div>
                         
-                        {/* Ideal Customer for this class */}
-                        {explainabilityData.ideal_customers[classKey] && (
+                        {/* Ideal Customer for class_1 only */}
+                        {classKey === 'class_1' && explainabilityData.ideal_customers && explainabilityData.ideal_customers.class_1 && (
                           <>
-                            <h6 className={`text-${classKey === 'class_1' ? 'success' : 'danger'} mb-3 mt-4`}>
-                              Most Ideal {explainabilityData.class_distribution[classKey].label} Profile
+                            <h6 className="text-success mb-3 mt-4">
+                              <i className="fas fa-crown me-2"></i>
+                              Most Ideal Potential Customer Profile
                             </h6>
-                            <Card className={`border-${classKey === 'class_1' ? 'success' : 'danger'}`}>
+                            <Card className="border-success">
                               <Card.Body>
                                 <Row className="mb-3">
                                   <Col md={3}>
-                                    <strong>Customer ID:</strong> {explainabilityData.ideal_customers[classKey].customer_id}
+                                    <strong>Customer ID:</strong> {explainabilityData.ideal_customers.class_1.customer_id}
                                   </Col>
                                   <Col md={3}>
                                     <strong>Match Score:</strong>{' '}
-                                    <Badge bg={classKey === 'class_1' ? 'success' : 'danger'}>
-                                      {explainabilityData.ideal_customers[classKey].match_percentage}%
+                                    <Badge bg="success">
+                                      {explainabilityData.ideal_customers.class_1.match_percentage}%
                                     </Badge>
                                   </Col>
                                   <Col md={3}>
                                     <strong>Prediction:</strong>{' '}
-                                    {(explainabilityData.ideal_customers[classKey].prediction_value * 100).toFixed(1)}%
+                                    {(explainabilityData.ideal_customers.class_1.prediction_value * 100).toFixed(1)}%
                                   </Col>
                                   <Col md={3}>
                                     <strong>Features Matched:</strong>{' '}
-                                    {explainabilityData.ideal_customers[classKey].matched_features.length}/
-                                    {explainabilityData.ideal_customers[classKey].total_features_checked}
+                                    {explainabilityData.ideal_customers.class_1.matched_features.length}/
+                                    {explainabilityData.ideal_customers.class_1.total_features_checked}
                                   </Col>
                                 </Row>
                                 
                                 <h6 className="text-info mb-2">Matching Features:</h6>
                                 <Row>
-                                  {explainabilityData.ideal_customers[classKey].matched_features.map((feature, idx) => (
+                                  {explainabilityData.ideal_customers.class_1.matched_features.map((feature, idx) => (
                                     <Col md={4} key={idx} className="mb-2">
-                                      <div className="p-2 bg-light rounded">
+                                      <div className={`p-2 rounded ${feature.frequency_rank === 1 ? 'bg-warning bg-opacity-25 border border-warning' : 'bg-light'}`}>
                                         <strong>{feature.feature}:</strong> {feature.value}
-                                        <Badge bg="info" size="sm" className="ms-2">
-                                          Rank #{feature.frequency_rank}
-                                        </Badge>
+                                        <div className="d-flex justify-content-between align-items-center mt-1">
+                                          <Badge bg={feature.frequency_rank === 1 ? 'warning' : 'info'} size="sm">
+                                            Rank #{feature.frequency_rank}
+                                          </Badge>
+                                          <small className="text-muted">{feature.percentage}%</small>
+                                        </div>
                                       </div>
                                     </Col>
                                   ))}

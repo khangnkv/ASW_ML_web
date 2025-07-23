@@ -383,8 +383,22 @@ def upload_file_uuid():
 # Main workflow endpoint
 @app.route('/api/predict_workflow', methods=['POST'])
 def predict_workflow():
+    """Complete workflow: Upload -> Preprocess -> Predict -> Return results"""
     if DEBUG_PRINTS:
-        print("[PREDICT] /api/predict_workflow endpoint called")
+        print(f"[PREDICT] /api/predict_workflow endpoint called")
+        print(f"[PREDICT] Current working directory: {os.getcwd()}")
+        print(f"[PREDICT] Script location: {Path(__file__).parent}")
+        
+        # Check if ProjectID_Detail.xlsx exists in expected locations
+        test_paths = [
+            '/app/backend/notebooks/project_info/ProjectID_Detail.xlsx',
+            '/app/notebooks/project_info/ProjectID_Detail.xlsx',
+            '/app/project_info/ProjectID_Detail.xlsx'
+        ]
+        for test_path in test_paths:
+            exists = Path(test_path).exists()
+            print(f"[PREDICT] Path check: {test_path} - Exists: {exists}")
+    
     try:
         data = request.get_json()
         if not data or 'filename' not in data:
@@ -729,13 +743,18 @@ def analyze_features_by_class(project_data, project_id):
             if len(data) == 0:
                 continue
                 
+            # Process ALL columns except exclude_cols
             for column in data.columns:
                 if column in exclude_cols:
                     continue
                 
-                # Skip columns with too many unique values or too few
+                # Skip columns with too many unique values (but be more lenient)
                 unique_count = data[column].nunique()
-                if unique_count > 50 or unique_count < 2:
+                if unique_count > 100:  # Increased from 50 to 100
+                    continue
+                
+                # Skip columns with only one unique value
+                if unique_count < 2:
                     continue
                 
                 # Get top 5 most frequent values
@@ -747,9 +766,10 @@ def analyze_features_by_class(project_data, project_id):
                             {
                                 'value': str(value),
                                 'count': int(count),
-                                'percentage': round(count / len(data) * 100, 1)
+                                'percentage': round(count / len(data) * 100, 1),
+                                'is_top_frequent': idx == 0  # Highlight top 1
                             }
-                            for value, count in value_counts.items()
+                            for idx, (value, count) in enumerate(value_counts.items())
                         ],
                         'total_unique': int(unique_count),
                         'sample_size': len(data)
@@ -762,27 +782,23 @@ def analyze_features_by_class(project_data, project_id):
         return {'class_0': {}, 'class_1': {}}
 
 def find_ideal_customers_by_class(project_data, feature_analysis, project_id):
-    """Find ideal customers for both classes based on top frequent features."""
+    """Find ideal customers for ONLY class_1 (potential customers) based on top frequent features."""
     try:
         ideal_customers = {}
         
-        # Separate data by prediction class
-        class_0_data = project_data[project_data['has_booked_prediction'] < 0.5].copy()
+        # Only process class_1 (potential customers)
         class_1_data = project_data[project_data['has_booked_prediction'] >= 0.5].copy()
         
-        for class_label, data in [('class_0', class_0_data), ('class_1', class_1_data)]:
-            if len(data) == 0 or class_label not in feature_analysis or not feature_analysis[class_label]:
-                ideal_customers[class_label] = None
-                continue
-            
+        # Only analyze class_1
+        if len(class_1_data) > 0 and 'class_1' in feature_analysis and feature_analysis['class_1']:
             customer_scores = []
             
-            for idx, row in data.iterrows():
+            for idx, row in class_1_data.iterrows():
                 score = 0
                 matched_features = []
                 total_features = 0
                 
-                for feature_name, feature_data in feature_analysis[class_label].items():
+                for feature_name, feature_data in feature_analysis['class_1'].items():
                     if feature_name in row:
                         total_features += 1
                         top_value = feature_data['top_values'][0]['value']
@@ -792,7 +808,8 @@ def find_ideal_customers_by_class(project_data, feature_analysis, project_id):
                             matched_features.append({
                                 'feature': feature_name,
                                 'value': str(row[feature_name]),
-                                'frequency_rank': 1
+                                'frequency_rank': 1,
+                                'percentage': feature_data['top_values'][0]['percentage']
                             })
                         else:
                             # Check if it matches any of the top 5 values
@@ -802,7 +819,8 @@ def find_ideal_customers_by_class(project_data, feature_analysis, project_id):
                                     matched_features.append({
                                         'feature': feature_name,
                                         'value': str(row[feature_name]),
-                                        'frequency_rank': i + 1
+                                        'frequency_rank': i + 1,
+                                        'percentage': val_data['percentage']
                                     })
                                     break
                 
@@ -827,14 +845,17 @@ def find_ideal_customers_by_class(project_data, feature_analysis, project_id):
                 reverse=True
             )
             
-            # Return the most ideal customer for this class
-            ideal_customers[class_label] = customer_scores[0] if customer_scores else None
+            # Return the most ideal customer for class_1 only
+            ideal_customers['class_1'] = customer_scores[0] if customer_scores else None
+        else:
+            ideal_customers['class_1'] = None
         
+        # Don't include class_0 ideal customer
         return ideal_customers
         
     except Exception as e:
         print(f"Error finding ideal customers: {e}")
-        return {'class_0': None, 'class_1': None}
+        return {'class_1': None}
 
 # Add endpoint to get available projects for explainability
 @app.route('/api/explainability/<filename>/projects', methods=['GET'])

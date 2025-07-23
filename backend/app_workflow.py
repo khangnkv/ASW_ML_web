@@ -723,12 +723,24 @@ def get_explainability_analysis(filename, project_id):
 def analyze_features_by_class(project_data, project_id):
     """Analyze top 5 most frequent values for each feature per class (0 and 1)."""
     try:
-        # Exclude system columns
+        # Exclude system columns AND ProjectID_Detail.xlsx columns
         exclude_cols = {
             'has_booked_prediction', 'prediction_confidence', 'customerid', 
             'projectid', 'questiondate', 'questiontime', 'fillindate', 
-            'saledate', 'bookingdate', 'has_booked'
+            'saledate', 'bookingdate', 'has_booked',
+            # Exclude columns that come from ProjectID_Detail.xlsx merge
+            'Project Brand', 'Project Type', 'Location'
         }
+        
+        # Dynamically detect and exclude any columns that came from ProjectID_Detail.xlsx
+        # These typically have title case and are company-related
+        for col in project_data.columns:
+            if col.startswith('Project ') or col in ['Location', 'Brand', 'Type']:
+                exclude_cols.add(col)
+        
+        if DEBUG_PRINTS:
+            print(f"[ANALYZE] Excluding columns: {exclude_cols}")
+            print(f"[ANALYZE] Available columns for analysis: {[c for c in project_data.columns if c not in exclude_cols]}")
         
         # Separate data by prediction class
         class_0_data = project_data[project_data['has_booked_prediction'] < 0.5].copy()
@@ -748,9 +760,9 @@ def analyze_features_by_class(project_data, project_id):
                 if column in exclude_cols:
                     continue
                 
-                # Skip columns with too many unique values (but be more lenient)
+                # Skip columns with too many unique values
                 unique_count = data[column].nunique()
-                if unique_count > 100:  # Increased from 50 to 100
+                if unique_count > 100:
                     continue
                 
                 # Skip columns with only one unique value

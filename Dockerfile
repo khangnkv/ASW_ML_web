@@ -17,37 +17,38 @@ RUN apt-get update && \
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories first
-RUN mkdir -p /app/backend/uploads /app/backend/preprocessed_unencoded /app/backend/notebooks/project_info /app/notebooks/project_info
+# Create the EXACT directory structure expected by preprocessing.py
+RUN mkdir -p /app/backend/uploads /app/backend/preprocessed_unencoded /app/backend/notebooks/project_info
 
-# CRITICAL: Copy ProjectID_Detail.xlsx FIRST before copying other files
-# This ensures the file is definitely there
+# CRITICAL: Copy the ProjectID_Detail.xlsx to the EXACT location expected
 COPY backend/notebooks/project_info/ProjectID_Detail.xlsx /app/backend/notebooks/project_info/ProjectID_Detail.xlsx
 
-# Verify the file was copied correctly
-RUN ls -la /app/backend/notebooks/project_info/ProjectID_Detail.xlsx && \
-    echo "ProjectID_Detail.xlsx successfully copied to /app/backend/notebooks/project_info/"
+# Verify the file is in the expected location
+RUN echo "Verifying ProjectID_Detail.xlsx in expected location:" && \
+    ls -la /app/backend/notebooks/project_info/ProjectID_Detail.xlsx && \
+    echo "File size: $(du -h /app/backend/notebooks/project_info/ProjectID_Detail.xlsx)"
 
-# Now copy other files
+# Now copy all other files
 COPY backend ./backend
 COPY preprocessing.py ./preprocessing.py
 COPY run_backend_only.py ./run_backend_only.py
-COPY notebooks ./notebooks/
 
-# Create additional copies in fallback locations
-RUN cp /app/backend/notebooks/project_info/ProjectID_Detail.xlsx /app/notebooks/project_info/ProjectID_Detail.xlsx && \
-    mkdir -p /app/project_info && \
-    cp /app/backend/notebooks/project_info/ProjectID_Detail.xlsx /app/project_info/ProjectID_Detail.xlsx
+# Copy notebooks directory if it exists
+COPY notebooks ./notebooks/ 2>/dev/null || echo "No notebooks directory found"
 
 # Set proper permissions
-RUN chmod -R 777 /app/backend/uploads /app/backend/preprocessed_unencoded /app/backend/notebooks /app/notebooks
+RUN chmod -R 777 /app/backend/uploads /app/backend/preprocessed_unencoded /app/backend/notebooks
 
-# Final verification
+# Final verification - ensure the file is still there after all copies
 RUN echo "=== FINAL VERIFICATION ===" && \
     ls -la /app/backend/notebooks/project_info/ && \
-    ls -la /app/notebooks/project_info/ && \
-    ls -la /app/project_info/ && \
-    echo "=== END VERIFICATION ==="
+    if [ -f "/app/backend/notebooks/project_info/ProjectID_Detail.xlsx" ]; then \
+        echo "SUCCESS: ProjectID_Detail.xlsx ready at expected location"; \
+        echo "File size: $(du -h /app/backend/notebooks/project_info/ProjectID_Detail.xlsx)"; \
+    else \
+        echo "ERROR: ProjectID_Detail.xlsx missing from expected location"; \
+        exit 1; \
+    fi
 
 # Set working directory to backend
 WORKDIR /app/backend

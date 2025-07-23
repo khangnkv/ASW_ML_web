@@ -323,7 +323,7 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
         print(f"Current working directory: {current_dir}")
         print(f"Processing file: {filepath}")
     
-    # Determine backend directory - FIXED LOGIC
+    # Determine backend directory
     if current_dir.name == 'backend':
         backend_dir = current_dir
         project_root = current_dir.parent
@@ -332,161 +332,166 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
         backend_dir = project_root / 'backend'
     
     if company_data_path is None:
-        # DIRECT PATH APPROACH - Use the exact Docker path structure
-        primary_path = Path('/app/backend/notebooks/project_info/ProjectID_Detail.xlsx')
+        # Use the SAME logic as run_pipeline() function - this is the correct approach
+        company_data_path = backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx'
         
-        if DEBUG_PRINTS:
-            print(f"Checking primary path: {primary_path}")
-            print(f"Primary path exists: {primary_path.exists()}")
-            
-            # Also check if the parent directories exist
-            print(f"Parent dir /app/backend/notebooks exists: {Path('/app/backend/notebooks').exists()}")
-            print(f"Parent dir /app/backend/notebooks/project_info exists: {Path('/app/backend/notebooks/project_info').exists()}")
-            
-            # List what's actually in that directory
-            project_info_dir = Path('/app/backend/notebooks/project_info')
-            if project_info_dir.exists():
-                print(f"Contents of {project_info_dir}:")
-                for item in project_info_dir.iterdir():
-                    print(f"  - {item.name}")
-            else:
-                print(f"Directory {project_info_dir} does not exist")
+        print(f"MANDATORY: Using table_path logic - ProjectID_Detail.xlsx at: {company_data_path}")
+        print(f"File exists: {company_data_path.exists()}")
         
-        if primary_path.exists():
-            company_data_path = primary_path
-            if DEBUG_PRINTS:
-                print(f"Found ProjectID_Detail.xlsx at: {company_data_path}")
-        else:
-            # Fallback paths if primary doesn't work
-            fallback_paths = [
+        if not company_data_path.exists():
+            # Try alternative paths based on the Docker setup
+            alternative_paths = [
+                Path('/app/backend/notebooks/project_info/ProjectID_Detail.xlsx'),
                 Path('/app/notebooks/project_info/ProjectID_Detail.xlsx'),
-                Path('/app/project_info/ProjectID_Detail.xlsx'),
                 backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
                 project_root / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx',
             ]
             
-            company_data_path = None
-            for path in fallback_paths:
+            for alt_path in alternative_paths:
                 if DEBUG_PRINTS:
-                    print(f"Checking fallback path: {path} - Exists: {path.exists()}")
-                if path.exists():
-                    company_data_path = path
-                    if DEBUG_PRINTS:
-                        print(f"Found ProjectID_Detail.xlsx at fallback: {company_data_path}")
+                    print(f"Trying alternative path: {alt_path} - Exists: {alt_path.exists()}")
+                if alt_path.exists():
+                    company_data_path = alt_path
+                    print(f"SUCCESS: Found ProjectID_Detail.xlsx at alternative location: {company_data_path}")
                     break
-            
-            if company_data_path is None:
-                # LAST RESORT: Create a minimal fallback file if none exists
-                print("WARNING: ProjectID_Detail.xlsx not found anywhere. Creating minimal fallback...")
+            else:
+                # List what's actually in the directory for debugging
+                project_info_dir = backend_dir / 'notebooks' / 'project_info'
+                if project_info_dir.exists():
+                    print(f"Contents of {project_info_dir}:")
+                    for item in project_info_dir.iterdir():
+                        print(f"  - {item.name} ({item.stat().st_size} bytes)")
+                else:
+                    print(f"Directory {project_info_dir} does not exist")
                 
-                # Create the directory structure
-                fallback_dir = Path('/app/backend/notebooks/project_info')
-                fallback_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Create a minimal ProjectID_Detail.xlsx with basic project info
-                fallback_path = fallback_dir / 'ProjectID_Detail.xlsx'
-                
-                # Create basic project data - you may need to adjust these based on your actual data structure
-                basic_project_data = {
-                    'Project ID': [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-                    'Project Brand': ['Sample Brand'] * 11,
-                    'Project Type': ['Condo'] * 11,
-                    'Location': ['Bangkok'] * 11
-                }
-                
-                fallback_df = pd.DataFrame(basic_project_data)
-                
-                try:
-                    fallback_df.to_excel(fallback_path, index=False, engine='openpyxl')
-                    company_data_path = fallback_path
-                    print(f"Created fallback ProjectID_Detail.xlsx at: {company_data_path}")
-                except Exception as e:
-                    print(f"Failed to create fallback file: {e}")
-                    raise FileNotFoundError("ProjectID_Detail.xlsx is required but not found and fallback creation failed")
+                raise FileNotFoundError(
+                    f"CRITICAL: ProjectID_Detail.xlsx is REQUIRED but not found. "
+                    f"Expected at: {backend_dir / 'notebooks' / 'project_info' / 'ProjectID_Detail.xlsx'}"
+                )
     
     if save_dir is None:
         save_dir = backend_dir / 'preprocessed_unencoded'
     os.makedirs(save_dir, exist_ok=True)
 
-    # Read company data - THIS IS MANDATORY
-    if company_data_path and Path(company_data_path).exists():
-        try:
-            company_df = pd.read_excel(company_data_path, engine='openpyxl')
-            # Ensure column name consistency
-            if 'Project ID' in company_df.columns:
-                company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
-            elif 'projectid' not in company_df.columns:
-                # If neither exists, create a basic projectid column
-                company_df['projectid'] = range(10, 10 + len(company_df))
-                print("Warning: No projectid column found, created basic sequence")
+    # NOW USE THE SAME LOGIC AS run_pipeline() - Call read_data function
+    try:
+        print(f"Using read_data() function with data_path={filepath} and table_path={company_data_path}")
+        
+        # Use the read_data function which properly handles the merge
+        df = read_data(str(filepath), str(company_data_path))
+        
+        print(f"read_data() successful - merged data shape: {df.shape}")
+        print(f"read_data() columns: {list(df.columns)}")
+        
+    except Exception as e:
+        print(f"ERROR: read_data() failed: {e}")
+        print("Falling back to manual file reading and merging...")
+        
+        # Fallback: Manual reading and merging
+        # Read input file
+        ext = str(filepath).split('.')[-1].lower()
+        if ext == 'csv':
+            df = pd.read_csv(filepath)
+        elif ext in ('xlsx', 'xls'):
+            df = pd.read_excel(filepath, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
+        else:
+            raise ValueError('Unsupported file type')
+
+        # Validate projectid
+        if 'projectid' not in df.columns:
+            raise ValueError('File must contain a "projectid" column.')
+        
+        # Read company data manually
+        if company_data_path and Path(company_data_path).exists():
+            try:
+                print(f"Loading ProjectID_Detail.xlsx from: {company_data_path}")
+                company_df = pd.read_excel(company_data_path, engine='openpyxl')
                 
-            if DEBUG_PRINTS:
-                print(f"Successfully loaded project info from: {company_data_path}")
-                print(f"Company data shape: {company_df.shape}")
+                print(f"Loaded company data shape: {company_df.shape}")
                 print(f"Company data columns: {list(company_df.columns)}")
-                print(f"Available project IDs: {sorted(company_df['projectid'].unique())}")
-        except Exception as e:
-            error_msg = f"CRITICAL ERROR: Failed to load ProjectID_Detail.xlsx from {company_data_path}: {e}"
-            print(error_msg)
-            raise RuntimeError(error_msg)
-    else:
-        raise FileNotFoundError(f"ProjectID_Detail.xlsx file is required but not accessible at: {company_data_path}")
+                
+                # Use the same renaming logic as read_data()
+                company_df.rename(columns={'Project ID': 'projectid'}, inplace=True)
+                
+                print(f"Available project IDs in company data: {sorted(company_df['projectid'].unique())}")
+                
+                # Perform merge
+                initial_shape = df.shape
+                df = pd.merge(df, company_df, on='projectid', how='left')
+                
+                print(f"MERGE RESULTS:")
+                print(f"  - Shape changed from {initial_shape} to {df.shape}")
+                
+                # Check for unmatched project IDs
+                input_projects = set(df['projectid'].unique())
+                company_projects = set(company_df['projectid'].unique())
+                unmatched_projects = input_projects - company_projects
+                matched_projects = input_projects & company_projects
+                
+                print(f"  - Matched projects: {len(matched_projects)} out of {len(input_projects)}")
+                if unmatched_projects:
+                    print(f"  - WARNING: Unmatched project IDs: {sorted(unmatched_projects)}")
+                
+            except Exception as e:
+                error_msg = f"CRITICAL ERROR: Failed to load ProjectID_Detail.xlsx from {company_data_path}: {e}"
+                print(error_msg)
+                raise RuntimeError(error_msg)
+        else:
+            raise FileNotFoundError(f"ProjectID_Detail.xlsx file is required but not accessible at: {company_data_path}")
 
-    # Read input file
-    ext = str(filepath).split('.')[-1].lower()
-    if ext == 'csv':
-        df = pd.read_csv(filepath)
-    elif ext in ('xlsx', 'xls'):
-        df = pd.read_excel(filepath, engine='openpyxl' if ext == 'xlsx' else 'xlrd')
-    else:
-        raise ValueError('Unsupported file type')
-
-    # Validate projectid
-    if 'projectid' not in df.columns:
-        raise ValueError('File must contain a "projectid" column.')
-    
-    if DEBUG_PRINTS:
-        print(f"Input data shape: {df.shape}")
-        print(f"Available columns: {list(df.columns)}")
-        print(f"Input project IDs: {sorted(df['projectid'].unique())}")
-    
-    # MANDATORY: Merge with company data
-    if company_df is not None:
-        initial_shape = df.shape
-        df = pd.merge(df, company_df, on='projectid', how='left')
-        if DEBUG_PRINTS:
-            print(f"After merge - shape changed from {initial_shape} to {df.shape}")
-            
-        # Check for unmatched project IDs
-        unmatched_projects = set(df['projectid'].unique()) - set(company_df['projectid'].unique())
-        if unmatched_projects:
-            print(f"Warning: Some project IDs not found in company data: {sorted(unmatched_projects)}")
-    else:
-        raise RuntimeError("Company data merge is mandatory but company_df is None")
+    print(f"Input data shape after merge: {df.shape}")
+    print(f"Input project IDs: {sorted(df['projectid'].unique())}")
 
     # Save original column order
     orig_cols = list(df.columns)
 
-    # Preprocessing steps (no encoding)
+    # NOW FOLLOW THE SAME PREPROCESSING STEPS AS run_pipeline()
     try:
+        # Step 1: Preprocess dates
         df = preprocess_dates(df)
         
-        # Condo only filtering - only apply if 'Type' column exists
+        # Step 2: Condo only filtering - only apply if 'Type' column exists
         if 'Type' in df.columns:
-            if DEBUG_PRINTS:
-                print("Filtering for condominiums (Type == 'คอนโดมิเนียม')")
+            print("Filtering for condominiums (Type == 'คอนโดมิเนียม')")
             initial_count = len(df)
             df = df[df['Type'] == 'คอนโดมิเนียม'].copy()
             filtered_count = len(df)
-            if DEBUG_PRINTS:
-                print(f"Filtered from {initial_count} to {filtered_count} rows")
+            print(f"Filtered from {initial_count} to {filtered_count} rows")
         else:
-            if DEBUG_PRINTS:
-                print("Warning: 'Type' column not found - skipping condo filtering")
+            print("Warning: 'Type' column not found - skipping condo filtering")
         
+        # Step 3: Add seasonal features
         df = add_seasonal_features(df, 'questiondate')
+        
+        # Step 4: Clean financial columns
         df = clean_financial_columns(df)
-        # Add more features as needed, but skip encoding
+        
+        # Step 5: Fill missing values - USE THE SAME FEATURE LISTS AS run_pipeline()
+        ordinal_features = ['decision_time_frame', 'age', 'car_type', 'room_size_wanted',
+                            'purchase_budget', 'residences_count', 'would_recommend', 'family_monthly_income',
+                            'individual_monthly_income_baht', 'Project Type'
+                            ]
+        
+        nominal_features = ['gender', 'occupation', 'marital_status', 'information_source',
+                        'purchasing_reason', 'decide_purchase_reason', 'not_book_reason',
+                        'other_projects_before_deicde', 'condo_payment', 'day_off_activity',
+                        'most_interested_activites_participation', 'saw_sign', 'exercise_preference',
+                        'condo_living_style', 'car_brand', 'purchase_intent', 'travel_route_today', 
+                        'Project Brand', 'Location']
+
+        df = fill_missing_categoricals(df, ordinal_features, nominal_features)
+        
+        # Step 6: Group rare categories
+        df = group_rare_categories_by_threshold(df, nominal_features, threshold=0.01)
+        
+        # Step 7: Final cleanup - BUT SKIP DROPPING COLUMNS since we need them for display
+        # df = final_cleanup(df)  # Skip this to preserve all columns
+        
+        # Instead, just drop rows with missing questiondate and sort
+        df = df.dropna(subset=['questiondate'])
+        df = df.sort_values(by='questiondate')
+        
+        print(f"After preprocessing - data shape: {df.shape}")
         
     except Exception as e:
         print(f"Error during preprocessing steps: {e}")
@@ -498,10 +503,15 @@ def preprocess_data(filepath, company_data_path=None, save_dir=None):
     fname = Path(filepath).stem
     out_path = Path(save_dir) / f'{fname}_preprocessed_{timestamp}.csv'
     df.to_csv(out_path, index=False)
+    print(f"Processed file saved to: {out_path}")
 
     # Reorder columns: original + new features at end
     new_cols = [c for c in df.columns if c not in orig_cols]
     df = df[orig_cols + new_cols]
+    
+    print(f"Final preprocessed data shape: {df.shape}")
+    print(f"Final columns: {list(df.columns)}")
+    
     return df
 
 if __name__ == "__main__":

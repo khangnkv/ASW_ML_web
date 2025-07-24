@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.model.predictor import MLPredictor
-from preprocessing import preprocess_data, get_raw_preview
+from preprocessing import preprocess_data, get_raw_preview, final_cleanup
 from backend.data_retention import retention_manager
 
 # Debug configuration - set to False to disable debug prints
@@ -386,24 +386,12 @@ def predict_workflow():
     """Complete workflow: Upload -> Preprocess -> Predict -> Return results"""
     if DEBUG_PRINTS:
         print(f"[PREDICT] /api/predict_workflow endpoint called")
-        print(f"[PREDICT] Current working directory: {os.getcwd()}")
-        print(f"[PREDICT] Script location: {Path(__file__).parent}")
-        
-        # Check if ProjectID_Detail.xlsx exists in expected locations
-        test_paths = [
-            '/app/backend/notebooks/project_info/ProjectID_Detail.xlsx',
-            '/app/notebooks/project_info/ProjectID_Detail.xlsx',
-            '/app/project_info/ProjectID_Detail.xlsx'
-        ]
-        for test_path in test_paths:
-            exists = Path(test_path).exists()
-            print(f"[PREDICT] Path check: {test_path} - Exists: {exists}")
     
     try:
         data = request.get_json()
         if not data or 'filename' not in data:
             return jsonify({'error': 'No filename provided'}), 400
-        
+
         filename = data['filename']
         upload_path = UPLOADS_DIR / filename
         
@@ -440,7 +428,7 @@ def predict_workflow():
                 import traceback
                 traceback.print_exc()
             return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
-        
+        model_input_df = final_cleanup(processed_df.copy())
         # 3. Check if predictor has models
         if not hasattr(predictor, 'models') or len(predictor.models) == 0:
             return jsonify({'error': 'No ML models available for prediction'}), 500
@@ -450,7 +438,7 @@ def predict_workflow():
             # Suppress warnings during prediction
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                result_df = predictor.predict(processed_df, log_progress=True)
+                result_df = predictor.predict(model_input_df, log_progress=True)
                 result_df = predictor.add_prediction_confidence(result_df)
             
             if DEBUG_PRINTS:
@@ -472,68 +460,21 @@ def predict_workflow():
             # 7. IMPROVED: Map predictions back to raw data for frontend display
             raw_with_predictions = raw_df.copy()
             raw_with_predictions['has_booked_prediction'] = np.nan
-            raw_with_predictions['prediction_confidence'] = 0.5
-            
-            # Create prediction mapping by projectid - IMPROVED LOGIC
-            if 'projectid' in raw_df.columns and 'projectid' in result_df.columns:
-                if DEBUG_PRINTS:
-                    print(f"[PREDICT] Mapping predictions from processed data to raw data")
-                    print(f"[PREDICT] Raw data projects: {sorted(raw_df['projectid'].unique())}")
-                    print(f"[PREDICT] Processed data projects: {sorted(result_df['projectid'].unique())}")
-                
-                # Create a more robust mapping using both index and projectid
-                prediction_map = {}
-                
-                # Build prediction dictionary from result_df
-                for idx, row in result_df.iterrows():
-                    project_id = row['projectid']
-                    prediction = row.get('has_booked_prediction', np.nan)
-                    confidence = row.get('prediction_confidence', 0.5)
-                    
-                    # Skip rows without valid predictions
-                    if pd.isna(prediction):
-                        continue
-                        
-                    # Create a key that can match back to raw data
-                    key = f"{project_id}"
-                    
-                    if key not in prediction_map:
-                        prediction_map[key] = []
-                        
-                    prediction_map[key].append({
-                        'prediction': prediction,
-                        'confidence': confidence,
-                        'original_index': idx
-                    })
-                
-                if DEBUG_PRINTS:
-                    print(f"[PREDICT] Created prediction map with {len(prediction_map)} project groups")
-                    print(f"[PREDICT] Total predictions available: {sum(len(v) for v in prediction_map.values())}")
-                
-                # Map predictions back to raw data
-                mapped_count = 0
-                for idx, row in raw_with_predictions.iterrows():
-                    project_id = row['projectid']
-                    key = f"{project_id}"
-                    
-                    if key in prediction_map and prediction_map[key]:
-                        # Take the first available prediction for this project
-                        pred_data = prediction_map[key].pop(0)
-                        raw_with_predictions.at[idx, 'has_booked_prediction'] = pred_data['prediction']
-                        raw_with_predictions.at[idx, 'prediction_confidence'] = pred_data['confidence']
-                        mapped_count += 1
-                
-                if DEBUG_PRINTS:
-                    print(f"[PREDICT] Successfully mapped {mapped_count} predictions to raw data")
-                    print(f"[PREDICT] Predictions with valid values: {raw_with_predictions['has_booked_prediction'].notna().sum()}")
+            raw_with_predictions['prediction_confidence'] = np.nan
 
-            else:
-                if DEBUG_PRINTS:
-                    print(f"[PREDICT] Warning: projectid column missing in raw or processed data")
-                    print(f"[PREDICT] Raw columns: {list(raw_df.columns)}")
-                    print(f"[PREDICT] Processed columns: {list(result_df.columns)}")
+            # Use the index from the results to update the raw dataframe
+            predictions_to_map = result_df[['has_booked_prediction', 'prediction_confidence']]
+             # Now, update the raw_with_predictions dataframe.
+            # The .update() method aligns on the index, which is exactly what we need.
+            raw_with_predictions.update(predictions_to_map)
+
+            if DEBUG_PRINTS:
+                mapped_count = raw_with_predictions['has_booked_prediction'].notna().sum()
+                print(f"[PREDICT] Robustly mapped {mapped_count} predictions back to raw data using index.")
         
             # 8. Save prediction results (raw + predictions) to separate folder
+            prediction_results_dir = UPLOADS_DIR / "prediction_results"
+            prediction_results_dir.mkdir(exist_ok=True)
             prediction_results_filename = filename.replace('.csv', '_prediction_results.csv')
             prediction_results_path = prediction_results_dir / prediction_results_filename
             raw_with_predictions.to_csv(prediction_results_path, index=False)
@@ -553,7 +494,7 @@ def predict_workflow():
                 if not pd.isna(pred_value) and not pd.isna(project_id):
                     predictions_list.append({
                         'projectid': int(project_id),
-                        'row_index': int(idx), # type: ignore
+                        'row_index': int(idx),
                         'prediction': float(pred_value),
                         'confidence': float(confidence)
                     })
@@ -603,6 +544,7 @@ def predict_workflow():
             import traceback
             traceback.print_exc()
         return jsonify({'error': f'Error processing request: {str(e)}'}), 500
+
 
 # Data retention management endpoints
 @app.route('/api/storage/stats', methods=['GET'])

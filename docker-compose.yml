@@ -1,21 +1,29 @@
+# Filename: docker-compose.yml
+
 services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.new
+      # Point to the single, consolidated Dockerfile
+      dockerfile: Dockerfile
     ports:
       - "5000:5000"
     volumes:
-      # Mount only data directories, not the entire backend
+      # This is the CORRECT way to handle data and config files.
+      # These mounts provide persistent storage and configuration at runtime.
       - ./backend/uploads:/app/backend/uploads
       - ./backend/preprocessed_unencoded:/app/backend/preprocessed_unencoded
-      # Mount project_info for easy access to ProjectID_Detail.xlsx
       - ./notebooks/project_info:/app/backend/notebooks/project_info
     environment:
+      # FLASK_ENV is already set in the Dockerfile, but setting it here
+      # can be useful to override it for different environments (e.g., development).
       - FLASK_ENV=production
       - PYTHONPATH=/app
     container_name: ml-backend
     restart: unless-stopped
+    # The healthcheck is now in the Dockerfile, but defining it here
+    # ensures docker-compose knows about it for service dependencies.
+    # This is not redundant, but complementary.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
       interval: 30s
@@ -31,12 +39,15 @@ services:
       - "3000:3000"
     depends_on:
       backend:
+        # This correctly waits for the backend to be healthy before starting.
         condition: service_healthy
     environment:
       - REACT_APP_API_URL=http://localhost:5000
     container_name: ml-frontend
     restart: unless-stopped
 
+# These named volumes are defined but not used in your services.
+# You can remove them unless you plan to use them later.
 volumes:
   ml_uploads:
   ml_preprocessed:

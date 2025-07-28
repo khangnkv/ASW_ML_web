@@ -1,0 +1,20 @@
+# .dockerignore
+
+# Git and OS files
+.git
+.gitignore
+.dockerignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and local config
+.idea/
+.vscode/
+*.env
+
+# Node.js dependencies (for frontend, if context is root)
+node_modules/

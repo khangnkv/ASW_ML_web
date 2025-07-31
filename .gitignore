@@ -104,3 +104,4 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+notebooks/project_info/*.xlsx

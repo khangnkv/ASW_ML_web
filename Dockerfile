@@ -29,7 +29,7 @@ RUN pip install --upgrade pip && \
 COPY backend ./backend
 COPY preprocessing.py ./preprocessing.py
 COPY run_backend_only.py ./run_backend_only.py
-COPY notebooks ./notebooks/
+COPY backend/notebooks ./backend/notebooks/
 
 # Create directories for the application, including mount points for volumes.
 # This ensures the container can run even without docker-compose.

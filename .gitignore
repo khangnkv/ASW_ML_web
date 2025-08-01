@@ -112,3 +112,4 @@ dmypy.json
 
 # Notebook project info (handled by LFS)
 notebooks/project_info/*.xlsx
+

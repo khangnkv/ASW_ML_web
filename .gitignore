@@ -55,17 +55,20 @@ yarn-error.log*
 # Build outputs
 /frontend/build/
 /frontend/dist/
+/frontend/.next/
+/frontend/.cache/
+/frontend/.turbo/
 
 # Environment variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 
 # Logs
 *.log
 logs/
+backend/logs/
+frontend/logs/
 
 # Temporary files
 *.tmp
@@ -73,7 +76,7 @@ logs/
 temp/
 tmp/
 
-# Data files (will be handled by Git LFS)
+# Data files (handled by Git LFS)
 *.csv
 *.xlsx
 *.xls
@@ -84,13 +87,15 @@ tmp/
 *.hdf5
 *.npz
 
-# Upload directories (contain user data)
+# Upload directories (user data)
 backend/uploads/
 backend/preprocessed_unencoded/
 
 # Cache directories
 .cache/
 *.cache
+frontend/.cache/
+backend/.cache/
 
 # Jupyter Notebooks checkpoints
 .ipynb_checkpoints/
@@ -104,4 +109,6 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Notebook project info (handled by LFS)
 notebooks/project_info/*.xlsx

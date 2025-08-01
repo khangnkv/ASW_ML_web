@@ -103,39 +103,48 @@ class SystemRunner:
         return True
     
     def start_backend(self):
-        """Start the Flask backend"""
+        """Start the Flask backend (runs app_workflow.py)"""
         print("🚀 Starting Flask backend...")
         try:
+            backend_path = Path("backend") / "app_workflow.py"
+            if not backend_path.exists():
+                # Try current directory (for Docker/local flexibility)
+                backend_path = Path("app_workflow.py")
+            if not backend_path.exists():
+                print(f"❌ Could not find app_workflow.py at {backend_path}")
+                return False
             self.backend_process = subprocess.Popen(
-                [sys.executable, "app.py"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                [sys.executable, str(backend_path)],
+                stdout=sys.stdout,
+                stderr=sys.stderr,
                 text=True
             )
-            print("✅ Backend started (PID: {})".format(self.backend_process.pid))
+            print(f"✅ Backend started (PID: {self.backend_process.pid})")
         except Exception as e:
             print(f"❌ Failed to start backend: {e}")
             return False
         return True
     
     def start_frontend(self):
-        """Start the React frontend"""
+        """Start the React frontend (npm start in frontend directory)"""
         print("🚀 Starting React frontend...")
         try:
             npm_path = self.find_npm()
             if not npm_path:
                 print("❌ npm not found")
                 return False
-            
-            os.chdir("frontend")
+            frontend_dir = Path("frontend")
+            if not frontend_dir.exists():
+                print("❌ frontend directory not found")
+                return False
             self.frontend_process = subprocess.Popen(
                 [npm_path, "start"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                cwd=str(frontend_dir),
+                stdout=sys.stdout,
+                stderr=sys.stderr,
                 text=True
             )
-            os.chdir("..")
-            print("✅ Frontend started (PID: {})".format(self.frontend_process.pid))
+            print(f"✅ Frontend started (PID: {self.frontend_process.pid})")
         except Exception as e:
             print(f"❌ Failed to start frontend: {e}")
             return False
